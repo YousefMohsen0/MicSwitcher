@@ -23,7 +23,7 @@ public class SettingsStoreTests : IDisposable
         var settings = SettingsStore.Load(SettingsPath);
 
         Assert.Null(settings.Pro.DeviceId);
-        Assert.Equal(3, settings.SilenceTimeoutSeconds);
+        Assert.Equal(2, settings.SilenceTimeoutSeconds);
         Assert.True(settings.SwitchCommunicationsRole);
         Assert.False(settings.Paused);
     }
@@ -62,7 +62,7 @@ public class SettingsStoreTests : IDisposable
 
         var settings = SettingsStore.Load(SettingsPath);
 
-        Assert.Equal(3, settings.SilenceTimeoutSeconds);
+        Assert.Equal(2, settings.SilenceTimeoutSeconds);
         Assert.True(File.Exists(SettingsPath + ".bak"));
     }
 

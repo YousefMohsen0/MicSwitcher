@@ -47,6 +47,7 @@ public partial class MicSwitcherApp : Application
         }
 
         DispatcherUnhandledException += OnUnhandledException;
+        Wpf.Ui.Appearance.ApplicationThemeManager.ApplySystemTheme();
 
         _settings = SettingsStore.Load();
         _devices = new AudioDeviceService();

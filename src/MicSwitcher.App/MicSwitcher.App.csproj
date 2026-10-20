@@ -11,13 +11,19 @@
     <RootNamespace>MicSwitcher.App</RootNamespace>
     <AssemblyName>MicSwitcher</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.1.0</Version>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Version>0.2.0</Version>
     <Product>MicSwitcher</Product>
     <Description>Automatically switches the default Windows microphone between a pro mic, a headset mic and a laptop mic.</Description>
   </PropertyGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="WPF-UI" Version="3.0.5" />
     <ProjectReference Include="..\MicSwitcher.Core\MicSwitcher.Core.csproj" />
   </ItemGroup>
 

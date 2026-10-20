@@ -64,4 +64,39 @@ public class CalibrationTests
         Assert.True(result.Reliable);
         Assert.NotNull(result.Warning);
     }
+
+    [Fact]
+    public void Threshold_IsPlacedAboveWhatTheOtherMicsVoiceCausesHere()
+    {
+        // Speaking into the headset leaks into this mic at about -45 dB; speaking into this mic gives -30 dB.
+        var result = Calibration.Compute(
+            Repeat(-70, 30), Repeat(-30, 60), targetSpeechDb: -30, adjustGain: false,
+            interferenceLevelsDb: Repeat(-45, 60));
+
+        Assert.True(result.Reliable);
+        Assert.True(result.ThresholdDb > -45, $"threshold {result.ThresholdDb} must be above the leak at -45");
+        Assert.True(result.ThresholdDb < -30, $"threshold {result.ThresholdDb} must be below speech at -30");
+        Assert.Null(result.Warning);
+    }
+
+    [Fact]
+    public void LeakAlmostAsLoudAsSpeech_ProducesAWarningAboutSeparatingTheMics()
+    {
+        var result = Calibration.Compute(
+            Repeat(-70, 30), Repeat(-30, 60), targetSpeechDb: -30, adjustGain: false,
+            interferenceLevelsDb: Repeat(-33, 60));
+
+        Assert.True(result.Reliable);
+        Assert.NotNull(result.Warning);
+        Assert.Contains("other mic", result.Warning!);
+    }
+
+    [Fact]
+    public void ThresholdNeverExceedsTheSpeechLevel()
+    {
+        var result = Calibration.Compute(Repeat(-50, 30), Repeat(-42, 60), targetSpeechDb: -42, adjustGain: false);
+
+        Assert.True(result.Reliable);
+        Assert.True(result.ThresholdDb < result.SpeechLevelDb);
+    }
 }

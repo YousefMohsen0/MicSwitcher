@@ -14,6 +14,7 @@ public sealed record ControllerStatus(
     bool HeadsetPresent,
     bool LaptopPresent,
     bool ProVoice,
+    bool HeadsetVoice,
     bool Paused,
     string Message);
 
@@ -34,6 +35,7 @@ public sealed class SwitchController : IDisposable
     // Separate lock so capture threads never wait on the (slower) device/engine lock; avoids a stop/start deadlock.
     private readonly object _detectorLock = new();
     private readonly EnergyVoiceDetector _detector = new();
+    private readonly EnergyVoiceDetector _headsetDetector = new();
 
     private SwitchingEngine _engine;
     private Timer? _timer;
@@ -112,16 +114,20 @@ public sealed class SwitchController : IDisposable
             _detector.ThresholdDb = _settings.VoiceThresholdDb;
             _detector.OnsetMs = _settings.VoiceOnsetMs;
             _detector.HangoverMs = _settings.VoiceHangoverMs;
+
+            _headsetDetector.ThresholdDb = _settings.HeadsetVoiceThresholdDb;
+            _headsetDetector.OnsetMs = _settings.VoiceOnsetMs;
+            _headsetDetector.HangoverMs = _settings.VoiceHangoverMs;
         }
     }
 
     private void OnBlock(MicRole role, double levelDb, double blockMs)
     {
-        if (role == MicRole.Pro)
+        if (role == MicRole.Pro || role == MicRole.Headset)
         {
             lock (_detectorLock)
             {
-                _detector.Process(levelDb, blockMs);
+                (role == MicRole.Pro ? _detector : _headsetDetector).Process(levelDb, blockMs);
             }
         }
 
@@ -150,7 +156,7 @@ public sealed class SwitchController : IDisposable
                 }
 
                 MicState pro = StateOf(MicRole.Pro, _detector.IsVoice);
-                MicState headset = StateOf(MicRole.Headset, false);
+                MicState headset = StateOf(MicRole.Headset, _headsetDetector.IsVoice);
                 MicState laptop = StateOf(MicRole.Laptop, false);
 
                 if (!_settings.Paused)
@@ -175,7 +181,7 @@ public sealed class SwitchController : IDisposable
                 }
 
                 status = new ControllerStatus(
-                    _currentDefault, pro.Present, headset.Present, laptop.Present, pro.Voice,
+                    _currentDefault, pro.Present, headset.Present, laptop.Present, pro.Voice, headset.Voice,
                     _settings.Paused, _settings.Paused ? "Automatic switching is paused" : _lastMessage);
             }
 
@@ -221,14 +227,20 @@ public sealed class SwitchController : IDisposable
             }
 
             _monitor.Ensure(MicRole.Pro, PresentIdOrNull(MicRole.Pro));
-            _monitor.Ensure(MicRole.Headset, _metersWanted ? PresentIdOrNull(MicRole.Headset) : null);
+            // The headset mic is listened to continuously: the switching rule needs to know when a voice is on it.
+            _monitor.Ensure(MicRole.Headset, PresentIdOrNull(MicRole.Headset));
             _monitor.Ensure(MicRole.Laptop, _metersWanted ? PresentIdOrNull(MicRole.Laptop) : null);
 
-            if (PresentIdOrNull(MicRole.Pro) is null)
+            lock (_detectorLock)
             {
-                lock (_detectorLock)
+                if (PresentIdOrNull(MicRole.Pro) is null)
                 {
                     _detector.Reset();
+                }
+
+                if (PresentIdOrNull(MicRole.Headset) is null)
+                {
+                    _headsetDetector.Reset();
                 }
             }
         }

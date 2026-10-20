@@ -2,19 +2,27 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using MicSwitcher.App.Audio;
 using MicSwitcher.Core;
 
 namespace MicSwitcher.App;
 
-/// <summary>Settings window: mic selection, live meters, calibration, tuning and the activity log.</summary>
-public partial class MainWindow : Window
+/// <summary>Settings window: mic selection, live meters, guided calibration, tuning and the activity log.</summary>
+public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
     private const string MissingSuffix = " (not connected)";
+
+    private static readonly Brush ProBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0xA0, 0x43));
+    private static readonly Brush HeadsetBrush = new SolidColorBrush(Color.FromRgb(0xDB, 0x8F, 0x00));
+    private static readonly Brush LaptopBrush = new SolidColorBrush(Color.FromRgb(0xCF, 0x22, 0x2E));
+    private static readonly Brush NoneBrush = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80));
 
     private readonly AppSettings _settings;
     private readonly SwitchController _controller;
@@ -31,7 +39,9 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private volatile bool _visible;
     private string _deviceSignature = string.Empty;
-    private List<double>? _calibrationSink;
+    private List<double>? _proSink;
+    private List<double>? _headsetSink;
+    private CancellationTokenSource? _calibrationCts;
 
     public MainWindow(
         AppSettings settings,
@@ -55,9 +65,18 @@ public partial class MainWindow : Window
             [MicRole.Laptop] = LaptopRow,
         };
 
-        ProRow.Title = "Pro mic (main)";
-        HeadsetRow.Title = "Headset mic";
-        LaptopRow.Title = "Laptop mic (only if the others are missing)";
+        ProRow.Configure(
+            "Pro mic",
+            "Your main microphone. Used whenever it can hear you.",
+            Wpf.Ui.Controls.SymbolRegular.Mic24);
+        HeadsetRow.Configure(
+            "Headset mic",
+            "Takes over when a voice is heard on the headset and not on the pro mic.",
+            Wpf.Ui.Controls.SymbolRegular.Headphones24);
+        LaptopRow.Configure(
+            "Laptop mic",
+            "Last resort, only used when neither of the others is connected.",
+            Wpf.Ui.Controls.SymbolRegular.Laptop24);
 
         foreach ((MicRole role, MicRow row) in _rows)
         {
@@ -77,6 +96,7 @@ public partial class MainWindow : Window
         _deviceTimer.Tick += (_, _) => RefreshDeviceLists();
 
         IsVisibleChanged += OnVisibleChanged;
+        Loaded += (_, _) => Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
 
         LoadSettingsIntoControls();
         RefreshDeviceLists();
@@ -96,6 +116,7 @@ public partial class MainWindow : Window
         if (!_allowClose)
         {
             e.Cancel = true;
+            _calibrationCts?.Cancel();
             Hide();
         }
         else
@@ -142,6 +163,7 @@ public partial class MainWindow : Window
             StartupCheck.IsChecked = _settings.StartWithWindows;
 
             ThresholdSlider.Value = _settings.VoiceThresholdDb;
+            HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
             SilenceSlider.Value = _settings.SilenceTimeoutSeconds;
             ReturnSlider.Value = _settings.ReturnDelayMs;
             UpdateSliderLabels();
@@ -155,8 +177,12 @@ public partial class MainWindow : Window
     private void UpdateSliderLabels()
     {
         ThresholdValue.Text = $"{ThresholdSlider.Value:0} dB";
+        HeadsetThresholdValue.Text = $"{HeadsetThresholdSlider.Value:0} dB";
         SilenceValue.Text = $"{SilenceSlider.Value:0.#} s";
         ReturnValue.Text = $"{ReturnSlider.Value:0} ms";
+
+        ProRow.SetThreshold(ThresholdSlider.Value);
+        HeadsetRow.SetThreshold(HeadsetThresholdSlider.Value);
     }
 
     private void RefreshDeviceLists()
@@ -252,11 +278,15 @@ public partial class MainWindow : Window
 
     private void OnLevelMeasured(MicRole role, double db)
     {
-        if (role == MicRole.Pro)
+        lock (_calibrationLock)
         {
-            lock (_calibrationLock)
+            if (role == MicRole.Pro)
             {
-                _calibrationSink?.Add(db);
+                _proSink?.Add(db);
+            }
+            else if (role == MicRole.Headset)
+            {
+                _headsetSink?.Add(db);
             }
         }
 
@@ -295,13 +325,16 @@ public partial class MainWindow : Window
 
     public void UpdateStatus(ControllerStatus status)
     {
-        ActiveText.Text = status.ActiveRole switch
+        (string name, Brush dot) = status.ActiveRole switch
         {
-            MicRole.Pro => "Active mic: Pro mic",
-            MicRole.Headset => "Active mic: Headset mic",
-            MicRole.Laptop => "Active mic: Laptop mic",
-            _ => "Active mic: none of your managed mics",
+            MicRole.Pro => ("Pro mic", ProBrush),
+            MicRole.Headset => ("Headset mic", HeadsetBrush),
+            MicRole.Laptop => ("Laptop mic", LaptopBrush),
+            _ => ("None of your mics", NoneBrush),
         };
+
+        ActiveText.Text = name;
+        StatusDot.Fill = status.Paused ? NoneBrush : dot;
 
         bool nothingConfigured = _rows.Keys.All(r => _settings.Get(r).DeviceId is null);
         DetailText.Text = nothingConfigured
@@ -309,28 +342,28 @@ public partial class MainWindow : Window
             : status.Message;
 
         SetBadge(ProRow, MicRole.Pro, status.ProPresent, status.ProVoice ? "voice" : "quiet", status);
-        SetBadge(HeadsetRow, MicRole.Headset, status.HeadsetPresent, "connected", status);
+        SetBadge(HeadsetRow, MicRole.Headset, status.HeadsetPresent, status.HeadsetVoice ? "voice" : "quiet", status);
         SetBadge(LaptopRow, MicRole.Laptop, status.LaptopPresent, "connected", status);
         SyncPaused();
     }
 
     private void SetBadge(MicRow row, MicRole role, bool present, string presentText, ControllerStatus status)
     {
-        bool configured = _settings.Get(role).DeviceId is not null;
-        if (!configured)
+        if (_settings.Get(role).DeviceId is null)
         {
-            row.SetBadge(string.Empty, good: false);
+            row.SetBadge(string.Empty, BadgeKind.Muted);
             return;
         }
 
         if (!present)
         {
-            row.SetBadge("not found", good: false, problem: true);
+            row.SetBadge("not found", BadgeKind.Problem);
             return;
         }
 
         string prefix = status.ActiveRole == role ? "★ default · " : string.Empty;
-        row.SetBadge(prefix + presentText, good: true);
+        bool hearingVoice = presentText == "voice";
+        row.SetBadge(prefix + presentText, hearingVoice ? BadgeKind.Good : BadgeKind.Muted);
     }
 
     public void SyncPaused()
@@ -387,6 +420,18 @@ public partial class MainWindow : Window
         _persist();
     }
 
+    private void HeadsetThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.HeadsetVoiceThresholdDb = Math.Round(HeadsetThresholdSlider.Value, 1);
+        UpdateSliderLabels();
+        _persist();
+    }
+
     private void SilenceSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (_loading)
@@ -439,7 +484,9 @@ public partial class MainWindow : Window
         _loading = false;
     }
 
-    // ----- calibration ----------------------------------------------------------------------------------------
+    // ----- guided calibration ---------------------------------------------------------------------------------
+
+    private void CancelCalibrationButton_Click(object sender, RoutedEventArgs e) => _calibrationCts?.Cancel();
 
     private async void CalibrateButton_Click(object sender, RoutedEventArgs e)
     {
@@ -455,82 +502,200 @@ public partial class MainWindow : Window
             return;
         }
 
+        bool useHeadset = _settings.Headset.DeviceId is not null && _controller.LastStatus?.HeadsetPresent == true;
+        int totalSteps = useHeadset ? 3 : 2;
+
+        var noisePro = new List<double>();
+        var noiseHeadset = new List<double>();
+        var speechPro = new List<double>();
+        var speechHeadset = new List<double>();
+        var proWhileHeadsetTalks = new List<double>();
+
         CalibrateButton.IsEnabled = false;
-        var noise = new List<double>();
-        var speech = new List<double>();
+        CalibrationText.Text = string.Empty;
+        CalibrationPanel.Visibility = Visibility.Visible;
+        _calibrationCts = new CancellationTokenSource();
+        CancellationToken token = _calibrationCts.Token;
 
         try
         {
-            CalibrationText.Text = "Stay quiet for 3 seconds…";
-            await CollectAsync(noise, TimeSpan.FromSeconds(3));
+            await RunPhaseAsync(
+                1, totalSteps, "Stay quiet", "Don't talk. Measuring the background noise.",
+                leadInSeconds: 0.5, seconds: 3, token, proSink: noisePro, headsetSink: useHeadset ? noiseHeadset : null);
 
-            CalibrationText.Text = "Now speak normally, close to the mic, for 6 seconds…";
-            await CollectAsync(speech, TimeSpan.FromSeconds(6));
+            await RunPhaseAsync(
+                2, totalSteps, "Speak into the pro mic",
+                "Say anything at your normal volume, for example count from one to ten.",
+                leadInSeconds: 1.5, seconds: 5, token, proSink: speechPro, headsetSink: null);
 
-            CalibrationResult result = Calibration.Compute(
-                noise, speech, _settings.TargetSpeechDb, _settings.AdjustGainOnCalibrate);
-
-            if (!result.Reliable)
+            if (useHeadset)
             {
-                CalibrationText.Text = result.Warning ?? "Calibration failed.";
-                return;
+                await RunPhaseAsync(
+                    3, totalSteps, "Now speak into the headset mic",
+                    "Wear the headset and talk the way you will when you use it.",
+                    leadInSeconds: 2, seconds: 5, token, proSink: proWhileHeadsetTalks, headsetSink: speechHeadset);
             }
 
-            double appliedGain = 0;
-            string gainNote = string.Empty;
-            if (_settings.AdjustGainOnCalibrate && Math.Abs(result.GainDeltaDb) >= 0.5)
-            {
-                try
-                {
-                    appliedGain = _devices.AdjustGainDb(proId, result.GainDeltaDb);
-                    gainNote = $" Input volume changed by {appliedGain:+0.#;-0.#} dB.";
-                }
-                catch (Exception ex)
-                {
-                    gainNote = " The input volume could not be changed.";
-                    AppLog.Info($"Could not change the input volume: {ex.Message}");
-                }
-            }
-
-            // The threshold was computed assuming the full gain change; correct it by what was really applied.
-            double threshold = result.ThresholdDb - result.GainDeltaDb + appliedGain;
-            threshold = Math.Clamp(Math.Round(threshold, 1), ThresholdSlider.Minimum, ThresholdSlider.Maximum);
-
-            _settings.VoiceThresholdDb = threshold;
-            _loading = true;
-            ThresholdSlider.Value = threshold;
-            UpdateSliderLabels();
-            _loading = false;
-            _persist();
-
-            CalibrationText.Text =
-                $"Noise {result.NoiseFloorDb:0} dB, speech {result.SpeechLevelDb:0} dB → threshold {threshold:0} dB.{gainNote}"
-                + (result.Warning is null ? string.Empty : " " + result.Warning);
-            AppLog.Info($"Calibrated pro mic: noise {result.NoiseFloorDb:0} dB, speech {result.SpeechLevelDb:0} dB, threshold {threshold:0} dB");
+            ApplyCalibration(proId, useHeadset, noisePro, speechPro, proWhileHeadsetTalks, noiseHeadset, speechHeadset);
+        }
+        catch (OperationCanceledException)
+        {
+            CalibrationText.Text = "Calibration cancelled. Nothing was changed.";
         }
         finally
         {
             lock (_calibrationLock)
             {
-                _calibrationSink = null;
+                _proSink = null;
+                _headsetSink = null;
             }
 
+            _calibrationCts?.Dispose();
+            _calibrationCts = null;
+            CalibrationPanel.Visibility = Visibility.Collapsed;
             CalibrateButton.IsEnabled = true;
         }
     }
 
-    private async Task CollectAsync(List<double> sink, TimeSpan duration)
+    /// <summary>Shows a lead-in ("get ready") and then a real countdown while collecting levels into the sinks.</summary>
+    private async Task RunPhaseAsync(
+        int step,
+        int totalSteps,
+        string title,
+        string hint,
+        double leadInSeconds,
+        double seconds,
+        CancellationToken token,
+        List<double>? proSink,
+        List<double>? headsetSink)
     {
-        lock (_calibrationLock)
+        CalibrationStepText.Text = $"STEP {step} OF {totalSteps}";
+        CalibrationTitleText.Text = title;
+        CalibrationHintText.Text = hint;
+        CalibrationProgress.Value = 0;
+
+        // Lead-in: gives the user a moment to react; nothing is recorded yet.
+        var leadIn = Stopwatch.StartNew();
+        CountdownText.FontSize = 40;
+        while (leadIn.Elapsed.TotalSeconds < leadInSeconds)
         {
-            _calibrationSink = sink;
+            CountdownText.Text = "Get ready…";
+            await Task.Delay(50, token);
         }
 
-        await Task.Delay(duration);
-
+        CountdownText.FontSize = 64;
         lock (_calibrationLock)
         {
-            _calibrationSink = null;
+            _proSink = proSink;
+            _headsetSink = headsetSink;
+        }
+
+        var timer = Stopwatch.StartNew();
+        while (true)
+        {
+            double elapsed = timer.Elapsed.TotalSeconds;
+            if (elapsed >= seconds)
+            {
+                break;
+            }
+
+            CountdownText.Text = Math.Ceiling(seconds - elapsed).ToString("0");
+            CalibrationProgress.Value = elapsed / seconds;
+            await Task.Delay(50, token);
+        }
+
+        CalibrationProgress.Value = 1;
+        lock (_calibrationLock)
+        {
+            _proSink = null;
+            _headsetSink = null;
         }
     }
+
+    private void ApplyCalibration(
+        string proId,
+        bool useHeadset,
+        List<double> noisePro,
+        List<double> speechPro,
+        List<double> proWhileHeadsetTalks,
+        List<double> noiseHeadset,
+        List<double> speechHeadset)
+    {
+        CalibrationResult pro = Calibration.Compute(
+            noisePro, speechPro, _settings.TargetSpeechDb, _settings.AdjustGainOnCalibrate,
+            interferenceLevelsDb: useHeadset ? proWhileHeadsetTalks : null);
+
+        if (!pro.Reliable)
+        {
+            CalibrationText.Text = "Pro mic: " + (pro.Warning ?? "calibration failed.") + " Nothing was changed.";
+            return;
+        }
+
+        double appliedGain = 0;
+        string gainNote = string.Empty;
+        if (_settings.AdjustGainOnCalibrate && Math.Abs(pro.GainDeltaDb) >= 0.5)
+        {
+            try
+            {
+                appliedGain = _devices.AdjustGainDb(proId, pro.GainDeltaDb);
+                gainNote = $" Input volume changed by {appliedGain:+0.#;-0.#} dB.";
+            }
+            catch (Exception ex)
+            {
+                gainNote = " The input volume could not be changed.";
+                AppLog.Info($"Could not change the input volume: {ex.Message}");
+            }
+        }
+
+        // The threshold assumed the full gain change; correct it by what was really applied.
+        double proThreshold = Clamp(pro.ThresholdDb - pro.GainDeltaDb + appliedGain, ThresholdSlider);
+        _settings.VoiceThresholdDb = proThreshold;
+
+        var lines = new List<string>
+        {
+            $"Pro mic: noise {pro.NoiseFloorDb:0} dB, speech {pro.SpeechLevelDb:0} dB, threshold {proThreshold:0} dB.{gainNote}",
+        };
+        if (pro.Warning is not null)
+        {
+            lines.Add("Pro mic: " + pro.Warning);
+        }
+
+        if (useHeadset)
+        {
+            CalibrationResult headset = Calibration.Compute(
+                noiseHeadset, speechHeadset, _settings.TargetSpeechDb, adjustGain: false);
+
+            if (headset.Reliable)
+            {
+                double headsetThreshold = Clamp(headset.ThresholdDb, HeadsetThresholdSlider);
+                _settings.HeadsetVoiceThresholdDb = headsetThreshold;
+                lines.Add($"Headset mic: noise {headset.NoiseFloorDb:0} dB, speech {headset.SpeechLevelDb:0} dB, threshold {headsetThreshold:0} dB.");
+                if (headset.Warning is not null)
+                {
+                    lines.Add("Headset mic: " + headset.Warning);
+                }
+            }
+            else
+            {
+                lines.Add("Headset mic: " + (headset.Warning ?? "calibration failed.") + " Its threshold was not changed.");
+            }
+        }
+        else
+        {
+            lines.Add("Headset mic: skipped (not set or not connected).");
+        }
+
+        _loading = true;
+        ThresholdSlider.Value = _settings.VoiceThresholdDb;
+        HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
+        UpdateSliderLabels();
+        _loading = false;
+        _persist();
+
+        CalibrationText.Text = string.Join(Environment.NewLine, lines);
+        AppLog.Info($"Calibrated: pro threshold {_settings.VoiceThresholdDb:0} dB, headset threshold {_settings.HeadsetVoiceThresholdDb:0} dB");
+    }
+
+    private static double Clamp(double value, System.Windows.Controls.Slider slider) =>
+        Math.Clamp(Math.Round(value, 1), slider.Minimum, slider.Maximum);
 }

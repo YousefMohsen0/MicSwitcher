@@ -22,13 +22,18 @@ public sealed class AppSettings
     /// <summary>Voice threshold for the pro mic in dBFS (set by calibration).</summary>
     public double VoiceThresholdDb { get; set; } = -45;
 
+    /// <summary>Voice threshold for the headset mic in dBFS (set by calibration).</summary>
+    public double HeadsetVoiceThresholdDb { get; set; } = -45;
+
     public double VoiceOnsetMs { get; set; } = 150;
     public double VoiceHangoverMs { get; set; } = 400;
 
-    /// <summary>Seconds without voice on the pro mic before the headset mic takes over.</summary>
-    public double SilenceTimeoutSeconds { get; set; } = 3;
+    /// <summary>
+    /// Seconds the pro mic must be free of voice before a voice heard only on the headset mic takes over.
+    /// </summary>
+    public double SilenceTimeoutSeconds { get; set; } = 2;
 
-    /// <summary>Milliseconds of continuous voice on the pro mic before it is taken back.</summary>
+    /// <summary>Milliseconds a voice must be heard continuously on a mic before switching to it.</summary>
     public double ReturnDelayMs { get; set; } = 300;
 
     public double MinSwitchIntervalSeconds { get; set; } = 1;

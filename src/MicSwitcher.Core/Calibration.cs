@@ -24,14 +24,27 @@ public static class Calibration
     /// <summary>Minimum number of speech blocks needed for a trustworthy result.</summary>
     public const int MinSpeechBlocks = 10;
 
+    /// <param name="noiseLevelsDb">Block levels while the user was quiet.</param>
+    /// <param name="speechLevelsDb">Block levels while the user spoke into this mic.</param>
+    /// <param name="targetSpeechDb">Level the speech should land on when gain adjustment is enabled.</param>
+    /// <param name="adjustGain">Whether to suggest a gain change.</param>
+    /// <param name="maxGainStepDb">Upper limit for the suggested gain change.</param>
+    /// <param name="interferenceLevelsDb">
+    /// Optional: block levels this mic picked up while the user spoke into <i>another</i> mic. The voice threshold is
+    /// placed above this level so the other mic's voice does not count as voice here.
+    /// </param>
     public static CalibrationResult Compute(
         IReadOnlyList<double> noiseLevelsDb,
         IReadOnlyList<double> speechLevelsDb,
         double targetSpeechDb,
         bool adjustGain,
-        double maxGainStepDb = 24)
+        double maxGainStepDb = 24,
+        IReadOnlyList<double>? interferenceLevelsDb = null)
     {
         double noiseFloor = noiseLevelsDb.Count == 0 ? -90 : Percentile(noiseLevelsDb, 0.9);
+        bool hasInterference = interferenceLevelsDb is { Count: > 0 };
+        double interference = hasInterference ? Percentile(interferenceLevelsDb!, 0.9) : double.NegativeInfinity;
+        double floor = Math.Max(noiseFloor, interference);
 
         var speechBlocks = speechLevelsDb.Where(l => l > noiseFloor + SpeechMarginDb).ToList();
         bool reliable = speechBlocks.Count >= MinSpeechBlocks;
@@ -40,21 +53,25 @@ public static class Calibration
             return new CalibrationResult(
                 noiseFloor,
                 speechBlocks.Count == 0 ? noiseFloor : Percentile(speechBlocks, 0.7),
-                ThresholdDb: noiseFloor + 12,
+                ThresholdDb: floor + 12,
                 GainDeltaDb: 0,
                 Reliable: false,
-                Warning: "Not enough speech was detected. Speak at your normal volume close to the pro mic and try again.");
+                Warning: "Not enough speech was detected. Speak at your normal volume close to the mic and try again.");
         }
 
         double speech = Percentile(speechBlocks, 0.7);
         double gain = adjustGain ? Math.Clamp(targetSpeechDb - speech, -maxGainStepDb, maxGainStepDb) : 0;
 
-        double headroom = speech - noiseFloor;
-        double threshold = noiseFloor + Math.Max(6, headroom * 0.4) + gain;
+        double headroom = speech - floor;
+        double threshold = Math.Min(floor + Math.Max(6, headroom * 0.4), speech - 2) + gain;
 
-        string? warning = headroom < 10
-            ? "Speech is only slightly louder than the background noise. Move closer to the mic or reduce noise for reliable detection."
-            : null;
+        string? warning = null;
+        if (headroom < 10)
+        {
+            warning = interference > noiseFloor
+                ? "Your voice into the other mic reaches this mic almost as loudly as speaking into it, so the two cannot be told apart reliably. Move the mics further apart or lower this mic's volume."
+                : "Speech is only slightly louder than the background noise. Move closer to the mic or reduce noise for reliable detection.";
+        }
 
         return new CalibrationResult(noiseFloor, speech, threshold, gain, true, warning);
     }
