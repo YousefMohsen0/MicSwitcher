@@ -11,7 +11,8 @@ public class SwitchingEngineTests
     private static readonly MicState Quiet = new(true, false);
     private static readonly MicState Talking = new(true, true);
 
-    private static DateTime At(double seconds) => T0.AddSeconds(seconds);
+    // Exact tick arithmetic: DateTime.AddSeconds(double) can land one tick off for values like 4.3.
+    private static DateTime At(double seconds) => T0.AddTicks((long)Math.Round(seconds * TimeSpan.TicksPerSecond));
 
     [Fact]
     public void ProWithVoice_StaysOnPro()
