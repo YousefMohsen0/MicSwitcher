@@ -5,10 +5,11 @@ on whether anyone is actually talking into the main one.**
 
 MicSwitcher is a small tray app for Windows 10/11. If you own a good desk microphone *and* a headset, you have probably
 run into this: Windows can only use one input at a time, so you either keep digging through Sound settings, or you end
-up with the wrong mic live. MicSwitcher listens to your main mic and flips the default for you.
+up with the wrong mic live. MicSwitcher listens to your mics and flips the default for you.
 
 - Talk into your desk mic and it is used.
-- Walk away, put the headset on and speak into that instead, and the headset mic takes over automatically.
+- Put the headset on and speak into that instead, and the headset mic takes over automatically.
+- Stop talking and nothing changes; it never switches just because it is quiet.
 - Unplug things and it falls back to whatever is still connected.
 
 Everything runs locally. MicSwitcher only measures audio *levels*; it never records, stores or sends audio, and it
@@ -45,24 +46,30 @@ You do not need all three. Leave a role unset and it is simply skipped.
 The rules:
 
 1. **Pro mic not connected:** use the headset mic; if that is missing too, use the laptop mic.
-2. **Pro mic connected and a voice is heard:** the pro mic is the default.
-3. **No voice on the pro mic for a few seconds** (default 3 s): the headset mic becomes the default.
-4. **Voice returns on the pro mic** and lasts a moment (default 0.3 s): the pro mic is the default again.
+2. **Pro mic connected:** it is the default. The headset mic only takes over when a voice is heard **on the headset
+   mic and not on the pro mic** (the pro mic has been free of voice for a couple of seconds, default 2 s).
+3. **Silence changes nothing.** If nobody is talking, the current mic stays the default, whichever it is.
+4. **Back to the pro mic:** while the headset is the default, it stays the default until a voice is heard on the pro
+   mic for a moment (default 0.3 s).
 5. A short minimum time between switches prevents flip-flopping, and the laptop mic is never chosen while the pro or
    headset mic is available.
 
-The pro mic is monitored continuously, even while it is not the default (Windows lets several apps listen to a mic at
-once). The headset and laptop mics are only metered while the settings window is open, so Windows' "microphone in use"
-indicator is not lit more than necessary.
+The pro and headset mics are monitored continuously, even while they are not the default (Windows lets several apps
+listen to a mic at once). The laptop mic is only metered while the settings window is open.
+
+Because the headset mic also hears you when you talk into the pro mic, calibration measures how loudly each mic hears
+you when you use the *other* one, and places the voice thresholds so the two can be told apart.
 
 ## Features
 
 - Runs quietly in the **system tray**. The icon colour shows the active mic: green = pro, amber = headset,
   red = laptop, grey = paused or none.
-- **Settings window** with mic selection, live level meters, a "voice" indicator and an activity log.
-- **Calibration**: measures your room noise and your speaking level, sets the voice threshold, and can optionally
-  adjust the Windows input volume of the pro mic so your voice lands at a good level.
-- Adjustable **silence timeout** and **switch-back delay**, plus a **pause** switch.
+- **Modern settings window** (follows your Windows light/dark theme) with mic selection, live level meters that show
+  the voice threshold as a marker line, "voice / quiet" indicators and an activity log.
+- **Guided calibration** with a live countdown: measures your room noise and how loud you are on each mic, sets both
+  voice thresholds, and can optionally adjust the Windows input volume of the pro mic so your voice lands at a good
+  level.
+- Adjustable thresholds, **pro-quiet time** and **switch delay**, plus a **pause** switch.
 - Optionally changes the **default communications device** too (the one Teams, Discord and Zoom use).
 - **Start with Windows**, running in the background with administrator rights and no UAC prompt at each logon.
 - Single self-contained executable, no installer and no .NET runtime required.
@@ -82,22 +89,24 @@ Choose **More info → Run anyway**. If you prefer, you can [build it from sourc
 
 1. Run `MicSwitcher.exe`. The settings window opens.
 2. In **Microphones**, choose which device is your **pro**, **headset** and **laptop** mic.
-3. Click **Calibrate pro mic…**. Stay quiet for 3 seconds, then speak normally, close to the mic, for 6 seconds.
+3. Put your headset on and click **Start calibration**. Follow the countdown: stay quiet for 3 seconds, speak into the
+   pro mic for 5 seconds, then speak into the headset mic for 5 seconds.
 4. Optional: tick **Start with Windows**. Windows asks for administrator permission once.
 5. Close the window. MicSwitcher keeps running in the tray; right-click the tray icon to pause or exit.
 
-To check it works, speak into the pro mic, then stay silent for a few seconds: the activity log shows each switch and
-why it happened.
+To check it works, talk into the pro mic, then talk into the headset: the activity log shows each switch and why it
+happened.
 
 ## Settings explained
 
 | Setting | What it does |
 |---------|--------------|
 | **Pause automatic switching** | Keeps monitoring but never changes the Windows default. Also available from the tray menu. |
-| **Also adjust the Windows input volume** | Lets calibration change the pro mic's Windows input volume so speech lands at a good level. |
-| **Voice threshold** | Level (dB) the pro mic must exceed to count as "someone is talking". Set by calibration; lower = more sensitive. |
-| **Switch to headset after silence** | How long the pro mic must be free of voice before the headset mic takes over (1 to 30 s). |
-| **Switch back after voice for** | How long a voice must be heard on the pro mic before it is taken back (100 to 1500 ms). |
+| **Also adjust the pro mic's Windows input volume** | Lets calibration change the pro mic's Windows input volume so speech lands at a good level. |
+| **Pro mic voice threshold** | Level (dB) the pro mic must exceed to count as "someone is talking". Set by calibration; lower = more sensitive. Shown as a line on the meter. |
+| **Headset mic voice threshold** | The same for the headset mic. |
+| **Pro mic quiet for…** | How long the pro mic must be free of voice before a voice on the headset is allowed to take over (0.5 to 15 s). |
+| **Voice needed before switching** | How long a voice must be heard on a mic before switching to it (100 to 1500 ms). |
 | **Also change the default communications device** | Sets the "default communications device" too, which chat apps like Teams, Discord and Zoom use. |
 | **Start with Windows** | Registers a Task Scheduler logon task that starts MicSwitcher hidden in the tray with highest privileges. |
 
@@ -121,8 +130,11 @@ Untick **Start with Windows** in the app, or delete the `MicSwitcher` task in Ta
 Yes. Leave the role you do not have set to *(not set)*.
 
 **My headset mic is always on. Is that a problem?**
-No, that is exactly the case MicSwitcher is built for. Only the pro mic is analysed for voice; the headset mic is
-simply switched to when the pro mic hears nobody.
+No, that is exactly the case MicSwitcher is built for. Both mics are watched for voice; the headset only takes over
+when the voice is on the headset and not on the pro mic.
+
+**What happens when nobody is talking?**
+Nothing. The current default stays as it is until a voice is heard.
 
 **Does it detect "human voice" or just loudness?**
 Currently loudness against a calibrated threshold, with smoothing to ignore clicks and bridge pauses between words. A
@@ -136,12 +148,17 @@ Check that switching is not paused (status card and tray menu), that each mic is
 the badge next to each mic does not say *not found*. The activity log shows every decision and any error.
 
 **It switches to the headset while I am talking into the pro mic.**
-The voice threshold is too high for your speaking level. Run **Calibrate pro mic…** again and speak at your normal volume
-and distance, or lower the threshold slider a few dB.
+The pro mic threshold is too high for your speaking level. Run the calibration again and speak at your normal volume
+and distance, or lower the pro mic threshold a few dB.
 
-**It never switches to the headset.**
-The threshold is too low, so background noise counts as voice. Recalibrate in a quiet moment, raise the threshold, or
-shorten the silence timeout.
+**It never switches to the headset when I talk into it.**
+Either the pro mic also hears you above its threshold (your voice leaks into it), or the headset threshold is too high.
+Recalibrate with the headset on, raise the pro mic threshold a few dB, move the pro mic further away, or lower the
+pro mic's input volume.
+
+**It switches back and forth while I talk.**
+Raise **Voice needed before switching** or **Pro mic quiet for…**, and check on the meters that the threshold lines sit
+clearly above the idle noise and below your speech.
 
 **The pro mic shows no level.**
 Another program may be using the mic in *exclusive mode*, which stops other apps (including MicSwitcher) from listening.
@@ -198,6 +215,14 @@ Issues and pull requests are welcome.
 - **Code:** keep decision logic in `MicSwitcher.Core` with unit tests; run `dotnet test` before opening a pull request.
 - **Ideas:** a real voice-activity detector (WebRTC VAD or a small neural model), a hotkey to force a mic, per-mic
   gain presets, a signed installer.
+
+## Credits
+
+- The placeholder application icon is based on the "microphone" icon from
+  [Material Design Icons](https://pictogrammers.com/library/mdi/) by Pictogrammers, licensed under the
+  [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+- UI built with [WPF UI](https://github.com/lepoco/wpfui) (MIT) and audio handled with
+  [NAudio](https://github.com/naudio/NAudio) (MIT).
 
 ## License
 
