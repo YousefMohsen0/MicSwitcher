@@ -45,4 +45,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" publish/MicSwitcher.exe --generate-notes
+        run: |
+          $flags = @()
+          if ("${{ github.ref_name }}" -like "v0.*") { $flags += "--prerelease" }
+          gh release create "${{ github.ref_name }}" publish/MicSwitcher.exe --generate-notes --title "MicSwitcher ${{ github.ref_name }}" @flags
