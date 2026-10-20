@@ -26,7 +26,7 @@ jobs:
         run: dotnet build MicSwitcher.sln -c Release --no-restore
 
       - name: Test
-        run: dotnet test MicSwitcher.sln -c Release --no-build --verbosity normal
+        run: dotnet test MicSwitcher.sln -c Release --no-build --verbosity normal --logger GitHubActions
 
       - name: Publish single-file executable
         run: >
