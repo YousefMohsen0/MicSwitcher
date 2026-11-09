@@ -17,15 +17,19 @@ public sealed class TrayManager : IDisposable
     private readonly Action _openWindow;
     private readonly Action<bool> _setPaused;
     private readonly Action _exit;
+    private readonly Func<MicRole, string> _nameOf;
+    private bool _paused;
 
-    public TrayManager(Action openWindow, Action<bool> setPaused, Action exit, bool paused)
+    public TrayManager(Action openWindow, Action<bool> setPaused, Action exit, bool paused, Func<MicRole, string> nameOf)
     {
         _openWindow = openWindow;
         _setPaused = setPaused;
         _exit = exit;
+        _nameOf = nameOf;
+        _paused = paused;
 
-        _pauseItem = new Forms.ToolStripMenuItem("Pause automatic switching") { Checked = paused, CheckOnClick = true };
-        _pauseItem.CheckedChanged += (_, _) => _setPaused(_pauseItem.Checked);
+        _pauseItem = new Forms.ToolStripMenuItem(PauseText(paused));
+        _pauseItem.Click += (_, _) => _setPaused(!_paused);
 
         _statusItem = new Forms.ToolStripMenuItem("MicSwitcher") { Enabled = false };
         _statusItem.Font = new Drawing.Font("Segoe UI Semibold", 9.5f);
@@ -34,7 +38,7 @@ public sealed class TrayManager : IDisposable
         {
             Font = new Drawing.Font("Segoe UI", 9.5f),
             ShowImageMargin = false,
-            ShowCheckMargin = true,
+            ShowCheckMargin = false,
             Padding = new Forms.Padding(0, 6, 0, 6),
         };
         menu.Items.Add(_statusItem);
@@ -68,21 +72,21 @@ public sealed class TrayManager : IDisposable
         };
     }
 
+    private static string PauseText(bool paused) => paused ? "Resume automatic switching" : "Pause automatic switching";
+
     public void SetPaused(bool paused)
     {
-        if (_pauseItem.Checked != paused)
-        {
-            _pauseItem.Checked = paused;
-        }
+        _paused = paused;
+        _pauseItem.Text = PauseText(paused);
     }
 
     public void Update(ControllerStatus status)
     {
         (string label, Drawing.Color color) = status.ActiveRole switch
         {
-            MicRole.Pro => ("Pro mic", Drawing.Color.FromArgb(46, 160, 67)),
-            MicRole.Headset => ("Headset mic", Drawing.Color.FromArgb(219, 143, 0)),
-            MicRole.Laptop => ("Laptop mic", Drawing.Color.FromArgb(207, 34, 46)),
+            MicRole.Pro => (_nameOf(MicRole.Pro), Drawing.Color.FromArgb(46, 160, 67)),
+            MicRole.Headset => (_nameOf(MicRole.Headset), Drawing.Color.FromArgb(219, 143, 0)),
+            MicRole.Laptop => (_nameOf(MicRole.Laptop), Drawing.Color.FromArgb(207, 34, 46)),
             _ => ("No managed mic", Drawing.Color.Gray),
         };
 
@@ -102,24 +106,14 @@ public sealed class TrayManager : IDisposable
 
     // ----- look: follows the Windows light/dark setting, flat with rounded corners on Windows 11 -----------------
 
-    private static bool IsLightTheme()
-    {
-        try
-        {
-            using Microsoft.Win32.RegistryKey? key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-            return key?.GetValue("AppsUseLightTheme") is not int value || value != 0;
-        }
-        catch (Exception)
-        {
-            return true;
-        }
-    }
-
     private static void ApplyTheme(Forms.ContextMenuStrip menu)
     {
-        bool light = IsLightTheme();
-        var colors = light
+        bool light = AppTheme.IsLight;
+        bool black = AppTheme.IsBlack;
+        var colors = black
+            ? new MenuColors(Drawing.Color.FromArgb(10, 10, 10), Drawing.Color.FromArgb(255, 255, 255),
+                Drawing.Color.FromArgb(140, 140, 140), Drawing.Color.FromArgb(40, 40, 40), Drawing.Color.FromArgb(48, 48, 48))
+            : light
             ? new MenuColors(Drawing.Color.FromArgb(249, 249, 249), Drawing.Color.FromArgb(32, 32, 32),
                 Drawing.Color.FromArgb(120, 120, 120), Drawing.Color.FromArgb(232, 232, 232), Drawing.Color.FromArgb(220, 220, 220))
             : new MenuColors(Drawing.Color.FromArgb(44, 44, 44), Drawing.Color.FromArgb(255, 255, 255),

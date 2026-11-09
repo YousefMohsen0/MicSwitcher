@@ -10,11 +10,23 @@ public sealed class MicSettings
 
     /// <summary>Friendly name, kept so the UI can show something useful when the device is unplugged.</summary>
     public string? DeviceName { get; set; }
+
+    /// <summary>Name the user gave this mic; null or empty means the default ("Pro mic", …).</summary>
+    public string? Label { get; set; }
+
+    /// <summary>Name of a built-in icon (a Fluent symbol such as "Mic24"); null means the default for the role.</summary>
+    public string? IconKey { get; set; }
+
+    /// <summary>Path of an image the user picked; takes priority over <see cref="IconKey"/> when the file exists.</summary>
+    public string? IconPath { get; set; }
 }
 
 /// <summary>All persisted user settings.</summary>
 public sealed class AppSettings
 {
+    /// <summary>"System" (follow Windows), "Light", "Dark" or "Black" (pure black for OLED screens).</summary>
+    public string Theme { get; set; } = "System";
+
     public MicSettings Pro { get; set; } = new();
     public MicSettings Headset { get; set; } = new();
     public MicSettings Laptop { get; set; } = new();

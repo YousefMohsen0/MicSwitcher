@@ -131,4 +131,23 @@ public class SettingsStoreTests : IDisposable
         Assert.True(loaded.IgnoreBleed);
         Assert.True(loaded.AutoCheckUpdates);
     }
+
+    [Fact]
+    public void ThemeAndMicAppearance_RoundTrip()
+    {
+        var settings = new AppSettings { Theme = "Black" };
+        settings.Headset.Label = "Gaming headset";
+        settings.Headset.IconKey = "Headphones24";
+        settings.Pro.IconPath = @"C:\icons\mic.png";
+
+        SettingsStore.Save(settings, SettingsPath);
+        var loaded = SettingsStore.Load(SettingsPath);
+
+        Assert.Equal("Black", loaded.Theme);
+        Assert.Equal("Gaming headset", loaded.Headset.Label);
+        Assert.Equal("Headphones24", loaded.Headset.IconKey);
+        Assert.Equal(@"C:\icons\mic.png", loaded.Pro.IconPath);
+        Assert.Null(loaded.Laptop.Label);
+        Assert.Equal("System", new AppSettings().Theme);
+    }
 }

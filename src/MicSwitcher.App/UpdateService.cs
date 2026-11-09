@@ -34,8 +34,16 @@ public sealed class UpdateService
     public async Task<ReleaseInfo?> CheckAsync(CancellationToken token = default)
     {
         using var client = CreateClient();
-        string json = await client.GetStringAsync(
-            $"https://api.github.com/repos/{Repository}/releases?per_page=15", token).ConfigureAwait(false);
+        string json;
+        try
+        {
+            json = await client.GetStringAsync(
+                $"https://api.github.com/repos/{Repository}/releases?per_page=15", token).ConfigureAwait(false);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            throw new InvalidOperationException("No public releases were found.", ex);
+        }
 
         var releases = UpdateChecker.ParseReleases(json, Repository);
         ReleaseInfo? newer = UpdateChecker.PickNewer(releases, CurrentVersion, _settings.IncludePrereleases);

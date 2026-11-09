@@ -84,6 +84,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         foreach ((MicRole role, MicRow row) in _rows)
         {
             row.Combo.SelectionChanged += (_, _) => OnDeviceSelected(role);
+            row.EditRequested += (_, _) => CustomizeMic(role);
+            ApplyAppearance(role);
         }
 
         LogList.ItemsSource = _logLines;
@@ -99,7 +101,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _deviceTimer.Tick += (_, _) => RefreshDeviceLists();
 
         IsVisibleChanged += OnVisibleChanged;
-        Loaded += (_, _) => Wpf.Ui.Appearance.SystemThemeWatcher.Watch(this);
+        Loaded += (_, _) => AppTheme.Apply(_settings.Theme, this);
 
         LoadSettingsIntoControls();
         RefreshDeviceLists();
@@ -167,6 +169,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             CommsCheck.IsChecked = _settings.SwitchCommunicationsRole;
             StartupCheck.IsChecked = _settings.StartWithWindows;
             BleedCheck.IsChecked = _settings.IgnoreBleed;
+            foreach (System.Windows.Controls.ComboBoxItem themeItem in ThemeCombo.Items)
+            {
+                if ((string)themeItem.Tag == AppTheme.Normalize(_settings.Theme))
+                {
+                    ThemeCombo.SelectedItem = themeItem;
+                }
+            }
+
             AutoCheckCheck.IsChecked = _settings.AutoCheckUpdates;
             AutoInstallCheck.IsChecked = _settings.AutoInstallUpdates;
             PrereleaseCheck.IsChecked = _settings.IncludePrereleases;
@@ -337,9 +347,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         (string name, Brush dot) = status.ActiveRole switch
         {
-            MicRole.Pro => ("Pro mic", ProBrush),
-            MicRole.Headset => ("Headset mic", HeadsetBrush),
-            MicRole.Laptop => ("Laptop mic", LaptopBrush),
+            MicRole.Pro => (MicAppearance.NameOf(_settings, MicRole.Pro), ProBrush),
+            MicRole.Headset => (MicAppearance.NameOf(_settings, MicRole.Headset), HeadsetBrush),
+            MicRole.Laptop => (MicAppearance.NameOf(_settings, MicRole.Laptop), LaptopBrush),
             _ => ("None of your mics", NoneBrush),
         };
 
@@ -404,6 +414,44 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _settings.AdjustGainOnCalibrate = AdjustGainCheck.IsChecked == true;
+        _persist();
+    }
+
+    private void ApplyAppearance(MicRole role) =>
+        _rows[role].SetAppearance(
+            MicAppearance.NameOf(_settings, role),
+            MicAppearance.SymbolOf(_settings, role),
+            MicAppearance.ImageOf(_settings, role));
+
+    private void CustomizeMic(MicRole role)
+    {
+        MicSettings mic = _settings.Get(role);
+        var dialog = new MicCustomizeDialog(role, mic) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        mic.Label = dialog.ResultLabel;
+        mic.IconKey = dialog.ResultIconKey;
+        mic.IconPath = dialog.ResultIconPath;
+        ApplyAppearance(role);
+        _persist();
+        if (_controller.LastStatus is ControllerStatus status)
+        {
+            UpdateStatus(status);
+        }
+    }
+
+    private void ThemeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loading || ThemeCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item)
+        {
+            return;
+        }
+
+        _settings.Theme = (string)item.Tag;
+        AppTheme.Apply(_settings.Theme, this);
         _persist();
     }
 

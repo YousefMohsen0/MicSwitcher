@@ -135,6 +135,23 @@
         </ui:Card>
 
         <!-- Behaviour -->
+        <TextBlock Text="Appearance" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="200"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Text="Theme" VerticalAlignment="Center"/>
+            <ComboBox x:Name="ThemeCombo" Grid.Column="1" SelectionChanged="ThemeCombo_SelectionChanged">
+              <ComboBoxItem Content="Follow Windows" Tag="System"/>
+              <ComboBoxItem Content="Light" Tag="Light"/>
+              <ComboBoxItem Content="Dark" Tag="Dark"/>
+              <ComboBoxItem Content="Black (OLED)" Tag="Black"/>
+            </ComboBox>
+          </Grid>
+        </ui:Card>
+
         <TextBlock Text="Bleed protection" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>

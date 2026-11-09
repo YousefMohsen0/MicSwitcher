@@ -37,6 +37,21 @@ public partial class MicRow : UserControl
         RoleIcon.Symbol = icon;
     }
 
+    /// <summary>Raised when the user clicks the pencil to rename the mic or change its icon.</summary>
+    public event EventHandler? EditRequested;
+
+    private void EditButton_Click(object sender, RoutedEventArgs e) => EditRequested?.Invoke(this, EventArgs.Empty);
+
+    /// <summary>Shows the user's own name and icon (a picture wins over a built-in symbol).</summary>
+    public void SetAppearance(string title, Wpf.Ui.Controls.SymbolRegular symbol, ImageSource? image)
+    {
+        TitleText.Text = title;
+        RoleIcon.Symbol = symbol;
+        RoleImage.Source = image;
+        RoleImage.Visibility = image is null ? Visibility.Collapsed : Visibility.Visible;
+        RoleIcon.Visibility = image is null ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     public void SetLevel(double db)
     {
         Meter.Value = Math.Clamp(db, MinDb, 0);

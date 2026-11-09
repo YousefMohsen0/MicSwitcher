@@ -22,7 +22,14 @@
                  Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
     </StackPanel>
 
-    <TextBlock x:Name="BadgeText" Grid.Column="2" VerticalAlignment="Top" FontWeight="SemiBold" Margin="12,0,0,0"/>
+    <Image x:Name="RoleImage" Width="26" Height="26" Margin="0,2,16,0" VerticalAlignment="Top"
+           HorizontalAlignment="Left" Visibility="Collapsed"/>
+
+    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Top" Margin="12,0,0,0">
+      <TextBlock x:Name="BadgeText" VerticalAlignment="Center" FontWeight="SemiBold"/>
+      <ui:Button x:Name="EditButton" Icon="{ui:SymbolIcon Edit24}" Appearance="Transparent" Padding="6"
+                 Margin="8,-4,-6,-4" ToolTip="Rename or change the icon" Click="EditButton_Click"/>
+    </StackPanel>
 
     <ComboBox x:Name="DeviceCombo" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
               HorizontalAlignment="Stretch" Margin="0,14,0,0" DisplayMemberPath="Name"/>

@@ -72,13 +72,12 @@ public partial class MicSwitcherApp : Application
         System.Windows.Forms.Application.SetUnhandledExceptionMode(System.Windows.Forms.UnhandledExceptionMode.CatchException);
         System.Windows.Forms.Application.ThreadException += (_, args) => AppLog.Info($"Unexpected error: {args.Exception}");
         Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
-        Wpf.Ui.Appearance.ApplicationThemeManager.ApplySystemTheme();
-
         _settings = SettingsStore.Load();
+        AppTheme.Apply(_settings.Theme);
         _devices = new AudioDeviceService();
         _monitor = new CaptureMonitor();
         _controller = new SwitchController(_settings, _devices, _monitor);
-        _tray = new TrayManager(ShowWindow, SetPaused, ExitApplication, _settings.Paused);
+        _tray = new TrayManager(ShowWindow, SetPaused, ExitApplication, _settings.Paused, role => MicAppearance.NameOf(_settings, role));
 
         _controller.StatusChanged += status => Dispatcher.BeginInvoke(new Action(() =>
         {
@@ -226,6 +225,10 @@ public partial class MicSwitcherApp : Application
         }
 
         _controller?.ReloadSettings();
+        if (_controller?.LastStatus is ControllerStatus current)
+        {
+            _tray?.Update(current);
+        }
     }
 
     private void SetPaused(bool paused)
