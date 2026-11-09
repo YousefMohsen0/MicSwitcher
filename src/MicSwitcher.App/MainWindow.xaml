@@ -160,7 +160,7 @@
                              Checked="Updates_Changed" Unchecked="Updates_Changed"/>
             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
               <ui:Button x:Name="UpdateButton" Content="Check for updates" Click="UpdateButton_Click"/>
-              <TextBlock x:Name="UpdateStatus" Margin="14,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+              <TextBlock x:Name="UpdateInfoText" Margin="14,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
                          Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
             </StackPanel>
           </StackPanel>

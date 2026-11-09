@@ -170,7 +170,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             AutoCheckCheck.IsChecked = _settings.AutoCheckUpdates;
             AutoInstallCheck.IsChecked = _settings.AutoInstallUpdates;
             PrereleaseCheck.IsChecked = _settings.IncludePrereleases;
-            UpdateStatus.Text = $"Version {UpdateService.CurrentVersion}";
+            UpdateInfoText.Text = $"Version {UpdateService.CurrentVersion}";
 
             ThresholdSlider.Value = _settings.VoiceThresholdDb;
             HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
@@ -436,7 +436,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         UpdateButton.IsEnabled = false;
         try
         {
-            UpdateStatus.Text = "Checking…";
+            UpdateInfoText.Text = "Checking…";
             ReleaseInfo? release = _updates.Available;
             if (release is null)
             {
@@ -445,13 +445,13 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
             if (release is null)
             {
-                UpdateStatus.Text = $"You are up to date (version {UpdateService.CurrentVersion}).";
+                UpdateInfoText.Text = $"You are up to date (version {UpdateService.CurrentVersion}).";
                 return;
             }
 
-            UpdateStatus.Text = $"Downloading {release.Tag}…";
+            UpdateInfoText.Text = $"Downloading {release.Tag}…";
             bool started = await _updates.DownloadAndInstallAsync(release);
-            UpdateStatus.Text = started ? "Installing… MicSwitcher will restart." : "The update could not be installed (see the log).";
+            UpdateInfoText.Text = started ? "Installing… MicSwitcher will restart." : "The update could not be installed (see the log).";
             if (started)
             {
                 Application.Current.Shutdown();
@@ -459,7 +459,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
         catch (Exception ex)
         {
-            UpdateStatus.Text = "Could not check for updates: " + ex.Message;
+            UpdateInfoText.Text = "Could not check for updates: " + ex.Message;
         }
         finally
         {
