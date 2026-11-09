@@ -12,7 +12,14 @@
     <AssemblyName>MicSwitcher</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <DebugType>none</DebugType>
+    <ServerGarbageCollector>false</ServerGarbageCollector>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <TieredPGO>false</TieredPGO>
+    <TieredCompilation>true</TieredCompilation>
     <Product>MicSwitcher</Product>
     <Description>Automatically switches the default Windows microphone between a pro mic, a headset mic and a laptop mic.</Description>
   </PropertyGroup>

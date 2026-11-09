@@ -29,6 +29,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     private readonly AudioDeviceService _devices;
     private readonly Action _persist;
     private readonly Action<bool> _setPaused;
+    private readonly UpdateService _updates;
     private readonly Dictionary<MicRole, MicRow> _rows;
     private readonly ObservableCollection<string> _logLines = new();
     private readonly DispatcherTimer _deviceTimer;
@@ -48,8 +49,10 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         SwitchController controller,
         AudioDeviceService devices,
         Action persist,
-        Action<bool> setPaused)
+        Action<bool> setPaused,
+        UpdateService updates)
     {
+        _updates = updates;
         _settings = settings;
         _controller = controller;
         _devices = devices;
@@ -110,22 +113,24 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     public void AllowClose() => _allowClose = true;
 
-    /// <summary>Closing the window hides it; the app keeps running in the tray.</summary>
+    /// <summary>
+    /// Closing really closes (and frees) the window; the app keeps running in the tray and builds a fresh window
+    /// next time. This also means no stale window can survive sleep/wake.
+    /// </summary>
     protected override void OnClosing(CancelEventArgs e)
     {
-        if (!_allowClose)
-        {
-            e.Cancel = true;
-            _calibrationCts?.Cancel();
-            Hide();
-        }
-        else
-        {
-            AppLog.LineAdded -= OnLogLine;
-            _controller.LevelMeasured -= OnLevelMeasured;
-        }
-
+        _calibrationCts?.Cancel();
+        _deviceTimer.Stop();
+        AppLog.LineAdded -= OnLogLine;
+        _controller.LevelMeasured -= OnLevelMeasured;
         base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _visible = false;
+        _controller.SetMetersWanted(false);
+        base.OnClosed(e);
     }
 
     // ----- visibility / refresh -------------------------------------------------------------------------------
@@ -161,6 +166,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             AdjustGainCheck.IsChecked = _settings.AdjustGainOnCalibrate;
             CommsCheck.IsChecked = _settings.SwitchCommunicationsRole;
             StartupCheck.IsChecked = _settings.StartWithWindows;
+            BleedCheck.IsChecked = _settings.IgnoreBleed;
+            AutoCheckCheck.IsChecked = _settings.AutoCheckUpdates;
+            AutoInstallCheck.IsChecked = _settings.AutoInstallUpdates;
+            PrereleaseCheck.IsChecked = _settings.IncludePrereleases;
+            UpdateStatus.Text = $"Version {UpdateService.CurrentVersion}";
 
             ThresholdSlider.Value = _settings.VoiceThresholdDb;
             HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
@@ -395,6 +405,66 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         _settings.AdjustGainOnCalibrate = AdjustGainCheck.IsChecked == true;
         _persist();
+    }
+
+    private void BleedCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.IgnoreBleed = BleedCheck.IsChecked == true;
+        _persist();
+    }
+
+    private void Updates_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.AutoCheckUpdates = AutoCheckCheck.IsChecked == true;
+        _settings.AutoInstallUpdates = AutoInstallCheck.IsChecked == true;
+        _settings.IncludePrereleases = PrereleaseCheck.IsChecked == true;
+        _persist();
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateButton.IsEnabled = false;
+        try
+        {
+            UpdateStatus.Text = "Checking…";
+            ReleaseInfo? release = _updates.Available;
+            if (release is null)
+            {
+                release = await _updates.CheckAsync();
+            }
+
+            if (release is null)
+            {
+                UpdateStatus.Text = $"You are up to date (version {UpdateService.CurrentVersion}).";
+                return;
+            }
+
+            UpdateStatus.Text = $"Downloading {release.Tag}…";
+            bool started = await _updates.DownloadAndInstallAsync(release);
+            UpdateStatus.Text = started ? "Installing… MicSwitcher will restart." : "The update could not be installed (see the log).";
+            if (started)
+            {
+                Application.Current.Shutdown();
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus.Text = "Could not check for updates: " + ex.Message;
+        }
+        finally
+        {
+            UpdateButton.IsEnabled = true;
+        }
     }
 
     private void CommsCheck_Changed(object sender, RoutedEventArgs e)

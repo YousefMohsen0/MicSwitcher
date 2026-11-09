@@ -76,6 +76,29 @@ public static class Calibration
         return new CalibrationResult(noiseFloor, speech, threshold, gain, true, warning);
     }
 
+    /// <summary>
+    /// Bleed calibration: from paired readings taken while audio played and the user stayed quiet, the level difference
+    /// (mic minus playback, dB) the mic hears. A high-ish percentile is used so the result errs on the cautious side.
+    /// Returns null when too little playback was heard.
+    /// </summary>
+    public static double? ComputeBleedCoupling(
+        IReadOnlyList<double> micLevelsDb,
+        IReadOnlyList<double> playbackLevelsDb,
+        int minSamples = 30)
+    {
+        int count = Math.Min(micLevelsDb.Count, playbackLevelsDb.Count);
+        var differences = new List<double>(count);
+        for (int i = 0; i < count; i++)
+        {
+            if (playbackLevelsDb[i] >= BleedGuard.PlaybackFloorDb)
+            {
+                differences.Add(micLevelsDb[i] - playbackLevelsDb[i]);
+            }
+        }
+
+        return differences.Count < minSamples ? null : Percentile(differences, 0.7);
+    }
+
     /// <summary>Linear-rank percentile (0..1) of a non-empty list.</summary>
     public static double Percentile(IReadOnlyList<double> values, double p)
     {

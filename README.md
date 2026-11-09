@@ -72,22 +72,40 @@ you when you use the *other* one, and places the voice thresholds so the two can
 - Adjustable thresholds, **pro-quiet time** and **switch delay**, plus a **pause** switch.
 - Optionally changes the **default communications device** too (the one Teams, Discord and Zoom use).
 - **Start with Windows**, running in the background with administrator rights and no UAC prompt at each logon.
-- Single self-contained executable, no installer and no .NET runtime required.
+- **Bleed protection**: sound from your speakers or headphones (a Discord call, music) that leaks into a mic is
+  recognised and not mistaken for you talking.
+- **Optional auto-update** from GitHub releases (checksum-verified), and a small **installer**; no .NET runtime needed.
+- Light on resources: it only wakes ~10 times per second, trims its memory when the window is closed, and builds the
+  window on demand.
 
 ## Install
 
 **Requirements:** Windows 10 or 11, 64-bit.
 
-1. Download `MicSwitcher.exe` from the [Releases](https://github.com/YousefMohsen0/MicSwitcher/releases) page.
-2. Put it somewhere permanent (for example `C:\Program Files\MicSwitcher\` or a folder in your user profile) and run it.
-   If you plan to use "Start with Windows", do not move it afterwards.
+1. Download `MicSwitcher-Setup-<version>.exe` from the [Releases](https://github.com/YousefMohsen0/MicSwitcher/releases) page.
+2. Run it. It installs for your user only (no administrator prompt) and offers to start MicSwitcher.
 
-Because the executable is not code-signed yet, Windows SmartScreen may show "Windows protected your PC" the first time.
+Uninstall from Windows **Settings → Apps**; this also removes the "Start with Windows" task.
+
+Because the installer is not code-signed yet, Windows SmartScreen may show "Windows protected your PC" the first time.
 Choose **More info → Run anyway**. If you prefer, you can [build it from source](#build-from-source) instead.
+
+### Updates
+
+Under **Updates** in the settings window you can turn automatic checks on or off, choose whether updates install
+automatically, and check manually. Updates are downloaded only from this repository's releases and installed only if
+their SHA-256 checksum matches. Everything is optional; with all switches off the app never contacts the network.
+
+### Bleed protection
+
+When someone else's voice or music comes out of your speakers or headphones, some of it is picked up by your mics.
+MicSwitcher listens to what your default playback device is playing and learns how much of it reaches each mic, then
+raises the voice threshold by that amount while sound is playing. Run **Start calibration** with your usual call or
+music playing quietly in the background to tune it precisely. You can turn it off in the settings window.
 
 ## Quick start
 
-1. Run `MicSwitcher.exe`. The settings window opens.
+1. Start MicSwitcher from the Start menu. The settings window opens.
 2. In **Microphones**, choose which device is your **pro**, **headset** and **laptop** mic.
 3. Put your headset on and click **Start calibration**. Follow the countdown: stay quiet for 3 seconds, speak into the
    pro mic for 5 seconds, then speak into the headset mic for 5 seconds.
@@ -165,8 +183,8 @@ Another program may be using the mic in *exclusive mode*, which stops other apps
 In Windows Sound settings → the device's properties → Advanced, untick "Allow applications to take exclusive control".
 
 **"Start with Windows" fails.**
-Accept the administrator prompt when it appears. It also only works with the downloaded or published `MicSwitcher.exe`,
-not when the app is started through `dotnet run`.
+Accept the administrator prompt when it appears. It only works with the installed app, not when the app is started
+through `dotnet run`.
 
 **The wrong device is selected after unplugging and replugging.**
 Devices are remembered by Windows' device ID. If a device appears under a new name (some USB ports do this), pick it again
@@ -183,9 +201,9 @@ cd MicSwitcher
 dotnet test                         # engine, voice detector, calibration and settings tests
 dotnet run --project src/MicSwitcher.App
 
-# single-file executable
-dotnet publish src/MicSwitcher.App -c Release -r win-x64 --self-contained true `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+# installer (needs Inno Setup 6)
+dotnet publish src/MicSwitcher.App -c Release -r win-x64 --self-contained true -o publish
+iscc /DAppVersion=0.3.0 /DSourceDir=publish installer\MicSwitcher.iss
 ```
 
 The core logic and its tests target plain .NET 8 and run on any OS; only the app project needs Windows.
@@ -196,7 +214,8 @@ The core logic and its tests target plain .NET 8 and run on any OS; only the app
 src/MicSwitcher.Core/            Pure logic: switching engine, voice detector, calibration, settings (no Windows code)
 src/MicSwitcher.App/             WPF tray app: NAudio capture, device switching, startup task, UI
 tests/MicSwitcher.Core.Tests/    xUnit tests for everything in Core
-.github/workflows/               CI: build, test, publish the exe, create releases from v* tags
+.github/workflows/               CI: build, test, build the installer, create releases
+installer/                       Inno Setup script for the compressed installer
 ```
 
 How the pieces fit: audio capture (`MicMonitor`) produces a level per short block → `EnergyVoiceDetector` decides if it

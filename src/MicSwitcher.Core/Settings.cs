@@ -47,6 +47,29 @@ public sealed class AppSettings
     /// <summary>Automatic switching is paused (the app keeps monitoring but never changes the default).</summary>
     public bool Paused { get; set; }
 
+    /// <summary>
+    /// Ignore sound that leaks into a mic from the speakers or headphones (call participants, music): the voice
+    /// threshold is raised while the PC is playing sound.
+    /// </summary>
+    public bool IgnoreBleed { get; set; } = true;
+
+    /// <summary>Extra dB above the expected bleed level that a voice must reach.</summary>
+    public double BleedMarginDb { get; set; } = 6;
+
+    /// <summary>Measured level difference (mic minus playback, dB) from bleed calibration; null = not calibrated.</summary>
+    public double? ProBleedCouplingDb { get; set; }
+
+    public double? HeadsetBleedCouplingDb { get; set; }
+
+    /// <summary>Check GitHub for new versions in the background.</summary>
+    public bool AutoCheckUpdates { get; set; } = true;
+
+    /// <summary>Download and install updates automatically, at a moment when nobody is talking.</summary>
+    public bool AutoInstallUpdates { get; set; }
+
+    /// <summary>Also offer releases marked as pre-release.</summary>
+    public bool IncludePrereleases { get; set; } = true;
+
     /// <summary>Let calibration change the Windows input volume of the pro mic.</summary>
     public bool AdjustGainOnCalibrate { get; set; } = true;
 

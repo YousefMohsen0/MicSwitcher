@@ -135,6 +135,37 @@
         </ui:Card>
 
         <!-- Behaviour -->
+        <TextBlock Text="Bleed protection" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <StackPanel>
+            <ui:ToggleSwitch x:Name="BleedCheck"
+                             Content="Ignore sound that comes out of my speakers or headphones"
+                             Checked="BleedCheck_Changed" Unchecked="BleedCheck_Changed"/>
+            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="Discord callers or music leaking into a mic will not count as you talking. The app listens to what is being played and raises the voice threshold by the amount that normally leaks into each mic. Re-run a calibration with the usual playback going to tune it."/>
+            <TextBlock x:Name="BleedStatus" Margin="0,8,0,0" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+          </StackPanel>
+        </ui:Card>
+
+        <TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <StackPanel>
+            <ui:ToggleSwitch x:Name="AutoCheckCheck" Content="Check for updates automatically"
+                             Checked="Updates_Changed" Unchecked="Updates_Changed"/>
+            <ui:ToggleSwitch x:Name="AutoInstallCheck" Margin="0,12,0,0" Content="Install updates automatically"
+                             Checked="Updates_Changed" Unchecked="Updates_Changed"/>
+            <ui:ToggleSwitch x:Name="PrereleaseCheck" Margin="0,12,0,0" Content="Include early (pre-release) versions"
+                             Checked="Updates_Changed" Unchecked="Updates_Changed"/>
+            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+              <ui:Button x:Name="UpdateButton" Content="Check for updates" Click="UpdateButton_Click"/>
+              <TextBlock x:Name="UpdateStatus" Margin="14,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
+                         Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+          </StackPanel>
+        </ui:Card>
+
         <TextBlock Text="Behaviour" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>

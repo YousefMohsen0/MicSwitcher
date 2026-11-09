@@ -29,13 +29,19 @@ public sealed class SwitchController : IDisposable
 
     private readonly AppSettings _settings;
     private readonly AudioDeviceService _devices;
-    private readonly MicMonitor _monitor;
+    private readonly CaptureMonitor _monitor;
     private readonly object _sync = new();
 
     // Separate lock so capture threads never wait on the (slower) device/engine lock; avoids a stop/start deadlock.
     private readonly object _detectorLock = new();
     private readonly EnergyVoiceDetector _detector = new();
     private readonly EnergyVoiceDetector _headsetDetector = new();
+    private readonly PlaybackTracker _playback = new();
+    private readonly BleedEstimator _proBleed = new();
+    private readonly BleedEstimator _headsetBleed = new();
+    private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+    private double _renderVolumeDb;
+    private volatile bool _suspended;
 
     private SwitchingEngine _engine;
     private Timer? _timer;
@@ -47,7 +53,7 @@ public sealed class SwitchController : IDisposable
     private ControllerStatus? _lastStatus;
     private string _lastMessage = "Starting…";
 
-    public SwitchController(AppSettings settings, AudioDeviceService devices, MicMonitor monitor)
+    public SwitchController(AppSettings settings, AudioDeviceService devices, CaptureMonitor monitor)
     {
         _settings = settings;
         _devices = devices;
@@ -63,6 +69,34 @@ public sealed class SwitchController : IDisposable
     public event Action<MicRole, double>? LevelMeasured;
 
     public ControllerStatus? LastStatus => _lastStatus;
+
+    /// <summary>Playback level (dBFS, after volume) heard over the last moments; -100 when silent. For the UI.</summary>
+    public double PlaybackDb => _playback.RecentLevelDb(_clock.ElapsedMilliseconds);
+
+    /// <summary>The bleed coupling currently in effect for a mic (learned, capped by the calibrated value).</summary>
+    public double? CouplingFor(MicRole role) => role switch
+    {
+        MicRole.Pro => BleedGuard.ChooseCoupling(_proBleed.CouplingDb, _settings.ProBleedCouplingDb),
+        MicRole.Headset => BleedGuard.ChooseCoupling(_headsetBleed.CouplingDb, _settings.HeadsetBleedCouplingDb),
+        _ => null,
+    };
+
+    /// <summary>Stops listening and switching (computer going to sleep). <see cref="Resume"/> undoes it.</summary>
+    public void Suspend()
+    {
+        _suspended = true;
+        _monitor.StopAll();
+    }
+
+    public void Resume()
+    {
+        lock (_sync)
+        {
+            _suspended = false;
+            _monitor.ResetFailures();
+            _lastRefresh = DateTime.MinValue;
+        }
+    }
 
     public void Start()
     {
@@ -121,13 +155,52 @@ public sealed class SwitchController : IDisposable
         }
     }
 
-    private void OnBlock(MicRole role, double levelDb, double blockMs)
+    private const string PlaybackKey = "playback";
+
+    private void OnBlock(string key, double levelDb, double blockMs)
     {
+        if (key == PlaybackKey)
+        {
+            // Loopback is captured before the output volume is applied; add it back to get the real loudness.
+            double heard = levelDb <= LevelMeter.FloorDb ? PlaybackTracker.SilenceDb : levelDb + Math.Min(0, _renderVolumeDb);
+            lock (_detectorLock)
+            {
+                _playback.Observe(heard, _clock.ElapsedMilliseconds);
+            }
+
+            return;
+        }
+
+        if (!Enum.TryParse(key, out MicRole role))
+        {
+            return;
+        }
+
         if (role == MicRole.Pro || role == MicRole.Headset)
         {
             lock (_detectorLock)
             {
-                (role == MicRole.Pro ? _detector : _headsetDetector).Process(levelDb, blockMs);
+                bool isPro = role == MicRole.Pro;
+                EnergyVoiceDetector detector = isPro ? _detector : _headsetDetector;
+                double userThreshold = isPro ? _settings.VoiceThresholdDb : _settings.HeadsetVoiceThresholdDb;
+
+                if (_settings.IgnoreBleed)
+                {
+                    double playbackDb = _playback.RecentLevelDb(_clock.ElapsedMilliseconds);
+                    BleedEstimator estimator = isPro ? _proBleed : _headsetBleed;
+                    estimator.Observe(levelDb, playbackDb, blockMs);
+
+                    double? coupling = BleedGuard.ChooseCoupling(
+                        estimator.CouplingDb, isPro ? _settings.ProBleedCouplingDb : _settings.HeadsetBleedCouplingDb);
+                    detector.ThresholdDb = BleedGuard.EffectiveThresholdDb(
+                        userThreshold, playbackDb, coupling, _settings.BleedMarginDb);
+                }
+                else
+                {
+                    detector.ThresholdDb = userThreshold;
+                }
+
+                detector.Process(levelDb, blockMs);
             }
         }
 
@@ -136,7 +209,7 @@ public sealed class SwitchController : IDisposable
 
     private void Tick()
     {
-        if (Interlocked.Exchange(ref _ticking, 1) == 1)
+        if (_suspended || Interlocked.Exchange(ref _ticking, 1) == 1)
         {
             return;
         }
@@ -212,7 +285,7 @@ public sealed class SwitchController : IDisposable
     {
         try
         {
-            _activeIds = _devices.GetActiveCaptureDevices().Select(d => d.Id).ToHashSet();
+            _activeIds = _devices.GetActiveCaptureIds().ToHashSet();
             string? defaultId = _devices.GetDefaultCaptureId();
 
             _currentDefault = null;
@@ -226,21 +299,27 @@ public sealed class SwitchController : IDisposable
                 }
             }
 
-            _monitor.Ensure(MicRole.Pro, PresentIdOrNull(MicRole.Pro));
+            _monitor.Ensure(nameof(MicRole.Pro), PresentIdOrNull(MicRole.Pro), CaptureKind.Microphone);
             // The headset mic is listened to continuously: the switching rule needs to know when a voice is on it.
-            _monitor.Ensure(MicRole.Headset, PresentIdOrNull(MicRole.Headset));
-            _monitor.Ensure(MicRole.Laptop, _metersWanted ? PresentIdOrNull(MicRole.Laptop) : null);
+            _monitor.Ensure(nameof(MicRole.Headset), PresentIdOrNull(MicRole.Headset), CaptureKind.Microphone);
+            _monitor.Ensure(nameof(MicRole.Laptop), _metersWanted ? PresentIdOrNull(MicRole.Laptop) : null, CaptureKind.Microphone);
+
+            // What the speakers/headphones are playing, so it is not mistaken for someone talking.
+            _monitor.Ensure(PlaybackKey, _settings.IgnoreBleed ? _devices.GetDefaultRenderId() : null, CaptureKind.Loopback);
+            _renderVolumeDb = _monitor.GetRenderVolumeDb(PlaybackKey) ?? 0;
 
             lock (_detectorLock)
             {
                 if (PresentIdOrNull(MicRole.Pro) is null)
                 {
                     _detector.Reset();
+                    _proBleed.Reset();
                 }
 
                 if (PresentIdOrNull(MicRole.Headset) is null)
                 {
                     _headsetDetector.Reset();
+                    _headsetBleed.Reset();
                 }
             }
         }

@@ -77,4 +77,58 @@ public class SettingsStoreTests : IDisposable
         Assert.True(options.ReturnDelay >= TimeSpan.Zero);
         Assert.True(options.MinSwitchInterval >= TimeSpan.Zero);
     }
+
+    [Fact]
+    public void NewDefaults_AreSensible()
+    {
+        var settings = new AppSettings();
+
+        Assert.True(settings.IgnoreBleed);
+        Assert.Equal(6, settings.BleedMarginDb);
+        Assert.Null(settings.ProBleedCouplingDb);
+        Assert.Null(settings.HeadsetBleedCouplingDb);
+        Assert.True(settings.AutoCheckUpdates);
+        Assert.False(settings.AutoInstallUpdates);
+        Assert.True(settings.IncludePrereleases);
+    }
+
+    [Fact]
+    public void BleedAndUpdateSettings_RoundTrip()
+    {
+        var settings = new AppSettings
+        {
+            IgnoreBleed = false,
+            BleedMarginDb = 9,
+            ProBleedCouplingDb = -38.5,
+            HeadsetBleedCouplingDb = -24,
+            AutoCheckUpdates = false,
+            AutoInstallUpdates = true,
+            IncludePrereleases = false,
+        };
+
+        SettingsStore.Save(settings, SettingsPath);
+        var loaded = SettingsStore.Load(SettingsPath);
+
+        Assert.False(loaded.IgnoreBleed);
+        Assert.Equal(9, loaded.BleedMarginDb);
+        Assert.Equal(-38.5, loaded.ProBleedCouplingDb);
+        Assert.Equal(-24, loaded.HeadsetBleedCouplingDb);
+        Assert.False(loaded.AutoCheckUpdates);
+        Assert.True(loaded.AutoInstallUpdates);
+        Assert.False(loaded.IncludePrereleases);
+    }
+
+    [Fact]
+    public void SettingsFileFromAnOlderVersion_StillLoads_WithNewDefaults()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(SettingsPath, "{ \"VoiceThresholdDb\": -40, \"Paused\": true }");
+
+        var loaded = SettingsStore.Load(SettingsPath);
+
+        Assert.Equal(-40, loaded.VoiceThresholdDb);
+        Assert.True(loaded.Paused);
+        Assert.True(loaded.IgnoreBleed);
+        Assert.True(loaded.AutoCheckUpdates);
+    }
 }

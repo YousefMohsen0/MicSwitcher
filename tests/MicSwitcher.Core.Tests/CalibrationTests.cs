@@ -99,4 +99,32 @@ public class CalibrationTests
         Assert.True(result.Reliable);
         Assert.True(result.ThresholdDb < result.SpeechLevelDb);
     }
+
+    [Fact]
+    public void BleedCoupling_IsTheCautiousLevelDifference()
+    {
+        var mic = Enumerable.Repeat(-55.0, 60).ToList();
+        var playback = Enumerable.Repeat(-20.0, 60).ToList();
+
+        Assert.Equal(-35, Calibration.ComputeBleedCoupling(mic, playback)!.Value, 3);
+    }
+
+    [Fact]
+    public void BleedCoupling_IgnoresSamplesWhileNothingPlayed()
+    {
+        var mic = Enumerable.Repeat(-55.0, 100).ToList();
+        var playback = Enumerable.Repeat(-100.0, 100).ToList();
+
+        Assert.Null(Calibration.ComputeBleedCoupling(mic, playback));
+    }
+
+    [Fact]
+    public void BleedCoupling_NeedsEnoughPlayback()
+    {
+        var mic = Enumerable.Repeat(-55.0, 10).ToList();
+        var playback = Enumerable.Repeat(-20.0, 10).ToList();
+
+        Assert.Null(Calibration.ComputeBleedCoupling(mic, playback, minSamples: 30));
+        Assert.NotNull(Calibration.ComputeBleedCoupling(mic, playback, minSamples: 5));
+    }
 }

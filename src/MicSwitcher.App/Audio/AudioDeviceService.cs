@@ -37,13 +37,45 @@ public sealed class AudioDeviceService
         return result;
     }
 
+    /// <summary>
+    /// Ids of all active capture devices. Cheaper than <see cref="GetActiveCaptureDevices"/> because no device
+    /// properties (names) are read; used for the frequent "is my mic still there" check.
+    /// </summary>
+    public IReadOnlyList<string> GetActiveCaptureIds()
+    {
+        var result = new List<string>();
+        using var enumerator = new MMDeviceEnumerator();
+        foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        {
+            try
+            {
+                result.Add(device.ID);
+            }
+            catch (Exception ex) when (ex is COMException or InvalidOperationException)
+            {
+                // The device vanished while it was being read.
+            }
+            finally
+            {
+                device.Dispose();
+            }
+        }
+
+        return result;
+    }
+
     /// <summary>Endpoint id of the default capture device for a role, or null when there is none.</summary>
-    public string? GetDefaultCaptureId(Role role = Role.Console)
+    public string? GetDefaultCaptureId(Role role = Role.Console) => GetDefaultId(DataFlow.Capture, role);
+
+    /// <summary>Endpoint id of the default playback device (speakers, headphones) for a role, or null.</summary>
+    public string? GetDefaultRenderId(Role role = Role.Console) => GetDefaultId(DataFlow.Render, role);
+
+    private static string? GetDefaultId(DataFlow flow, Role role)
     {
         try
         {
             using var enumerator = new MMDeviceEnumerator();
-            using MMDevice device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, role);
+            using MMDevice device = enumerator.GetDefaultAudioEndpoint(flow, role);
             return device.ID;
         }
         catch (COMException)
