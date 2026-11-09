@@ -26,6 +26,25 @@ public partial class MicSwitcherApp : Application
     {
         base.OnStartup(e);
 
+        if (e.Args.Contains("--enable-startup", StringComparer.OrdinalIgnoreCase))
+        {
+            // Used by the installer: registers the "start with Windows" task (one UAC prompt) and exits.
+            string? error = StartupManager.SetEnabled(true);
+            if (error is null)
+            {
+                _settings = SettingsStore.Load();
+                _settings.StartWithWindows = true;
+                SettingsStore.Save(_settings);
+            }
+            else
+            {
+                AppLog.Info($"Could not enable start with Windows: {error}");
+            }
+
+            Shutdown();
+            return;
+        }
+
         bool createdNew;
         try
         {
@@ -121,6 +140,13 @@ public partial class MicSwitcherApp : Application
             {
                 AppLog.Info($"Could not open the window (attempt {attempt}): {ex}");
                 DiscardWindow();
+                if (attempt == 2)
+                {
+                    MessageBox.Show(
+                        "MicSwitcher could not open its window:\n\n" + ex.Message +
+                        "\n\nThe details were saved to %AppData%\\MicSwitcher\\log.txt.",
+                        "MicSwitcher", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
             }
         }
     }

@@ -38,11 +38,14 @@ Name: "{group}\MicSwitcher"; Filename: "{app}\MicSwitcher.exe"
 Name: "{autodesktop}\MicSwitcher"; Filename: "{app}\MicSwitcher.exe"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "startup"; Description: "Start MicSwitcher with Windows (runs in the background with administrator rights; asks for permission once)"; GroupDescription: "Startup:"
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Run]
-; After a silent auto-update (/RELAUNCH=1) or a normal install, start the app again.
-Filename: "{app}\MicSwitcher.exe"; Description: "Start MicSwitcher"; Flags: nowait postinstall skipifsilent
+; Register the startup task (shows one administrator prompt), then offer to open the app.
+Filename: "{app}\MicSwitcher.exe"; Parameters: "--enable-startup"; Tasks: startup; Flags: waituntilterminated skipifsilent
+; After a silent auto-update (/RELAUNCH=1) the app is started again; after a normal install the user is asked.
+Filename: "{app}\MicSwitcher.exe"; Description: "Open MicSwitcher now"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\MicSwitcher.exe"; Flags: nowait; Check: ShouldRelaunch
 
 [UninstallRun]
