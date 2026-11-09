@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using Microsoft.Win32;
 using MicSwitcher.Core;
 using Wpf.Ui.Controls;
+using TextBlock = System.Windows.Controls.TextBlock;
 
 namespace MicSwitcher.App;
 
