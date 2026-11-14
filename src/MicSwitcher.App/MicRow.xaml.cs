@@ -45,6 +45,11 @@ public partial class MicRow : UserControl
 
     private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (!IsInitialized)
+        {
+            return; // raised while the XAML is still being built
+        }
+
         ThresholdText.Text = $"{ThresholdSlider.Value:0} dB";
         if (!_settingSlider)
         {

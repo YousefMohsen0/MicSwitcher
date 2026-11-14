@@ -211,6 +211,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void UpdateSliderLabels()
     {
+        if (SilenceValue is null || ReturnValue is null)
+        {
+            return; // raised while the XAML is still being built
+        }
+
         SilenceValue.Text = $"{SilenceSlider.Value:0.0} s";
         ReturnValue.Text = $"{ReturnSlider.Value:0} ms";
     }
@@ -730,6 +735,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void SilenceSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (!IsInitialized)
+        {
+            return;
+        }
+
         UpdateSliderLabels();
         if (_loading)
         {
@@ -742,6 +752,11 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
     private void ReturnSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        if (!IsInitialized)
+        {
+            return;
+        }
+
         UpdateSliderLabels();
         if (_loading)
         {

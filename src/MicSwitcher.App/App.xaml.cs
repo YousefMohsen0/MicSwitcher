@@ -209,7 +209,7 @@ public partial class MicSwitcherApp : Application
                 if (attempt == 2)
                 {
                     MessageBox.Show(
-                        Loc.F("App_CannotOpen", ex.Message),
+                        Loc.F("App_CannotOpen", ex.Message + Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, (ex.StackTrace ?? string.Empty).Split('\n').Take(4))),
                         "MicSwitcher", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
