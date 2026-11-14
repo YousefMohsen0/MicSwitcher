@@ -7,6 +7,19 @@ public static class Strings
 {
     public static readonly Dictionary<string, string> English = new()
     {
+        ["Badge_Noise"] = "Noise ignored",
+        ["Customize_Color"] = "Colour in the tray and timeline",
+        ["Customize_ColorAuto"] = "Automatic",
+        ["Log_VoiceHeard"] = "Voice: heard “{0}”.",
+        ["Log_VoiceUnsure"] = "Voice: heard “{0}” but was not sure ({1}), ignored.",
+        ["Log_VoiceRejected"] = "Voice: heard speech that is not a command.",
+        ["Notify_VoiceTitle"] = "Voice command",
+        ["VoiceCommand_SwitchToMic"] = "Switching microphone",
+        ["VoiceCommand_NextMic"] = "Next microphone",
+        ["VoiceCommand_Pause"] = "Switching paused",
+        ["VoiceCommand_Resume"] = "Switching resumed",
+        ["VoiceCommand_ReleaseLock"] = "Back to automatic",
+        ["VoiceCommand_SwitchProfile"] = "Changing profile",
         // App
         ["App_AlreadyRunning"] = "MicSwitcher is already running. Look for its icon in the system tray (near the clock).",
         ["App_CannotOpen"] = "MicSwitcher could not open its window: {0}",
@@ -256,6 +269,19 @@ public static class Strings
 
     public static readonly Dictionary<string, string> Arabic = new()
     {
+        ["Badge_Noise"] = "دوشة متجاهلة",
+        ["Customize_Color"] = "اللون في أيقونة النظام والتايم لاين",
+        ["Customize_ColorAuto"] = "تلقائي",
+        ["Log_VoiceHeard"] = "الصوت: سمعت “{0}”.",
+        ["Log_VoiceUnsure"] = "الصوت: سمعت “{0}” بس مش متأكد ({1})، اتجاهلت.",
+        ["Log_VoiceRejected"] = "الصوت: سمعت كلام مش أمر.",
+        ["Notify_VoiceTitle"] = "أمر صوتي",
+        ["VoiceCommand_SwitchToMic"] = "بنبدّل الميكروفون",
+        ["VoiceCommand_NextMic"] = "الميكروفون اللي بعده",
+        ["VoiceCommand_Pause"] = "التبديل اتوقف",
+        ["VoiceCommand_Resume"] = "التبديل رجع",
+        ["VoiceCommand_ReleaseLock"] = "رجوع للتلقائي",
+        ["VoiceCommand_SwitchProfile"] = "بنغيّر الإعداد",
         ["App_AlreadyRunning"] = "MicSwitcher شغّال بالفعل. دوّر على أيقونته في شريط النظام (جنب الساعة).",
         ["App_CannotOpen"] = "MicSwitcher مقدرش يفتح نافذته: {0}",
 

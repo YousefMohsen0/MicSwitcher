@@ -27,6 +27,9 @@ public sealed class MicSlot
     /// <summary>Only used when no non-fallback mic is present (like a laptop's built-in mic).</summary>
     public bool Fallback { get; set; }
 
+    /// <summary>Colour (#RRGGBB) used for this mic in the tray icon and timeline; null = automatic by position.</summary>
+    public string? Color { get; set; }
+
     /// <summary>Voice threshold in dBFS (set by calibration).</summary>
     public double VoiceThresholdDb { get; set; } = -45;
 
@@ -157,6 +160,12 @@ public sealed class AppSettings
 
     /// <summary>The mic that listens for commands (null = the current default mic).</summary>
     public string? VoiceCommandMicId { get; set; }
+
+    /// <summary>Where the settings window was last placed (null = centre of the screen).</summary>
+    public double? WindowLeft { get; set; }
+    public double? WindowTop { get; set; }
+    public double? WindowWidth { get; set; }
+    public double? WindowHeight { get; set; }
 
     [JsonIgnore]
     public Profile ActiveProfile =>

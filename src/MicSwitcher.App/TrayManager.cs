@@ -107,9 +107,9 @@ public sealed class TrayManager : IDisposable
         _notifyIcon.Text = text.Length <= 63 ? text : text[..63];
     }
 
-    private static Drawing.Color ColorAt(int index)
+    private Drawing.Color ColorAt(int index)
     {
-        (byte r, byte g, byte b) = MicColors.At(index);
+        (byte r, byte g, byte b) = MicColors.For(index < _settings.Mics.Count ? _settings.Mics[index] : null, index);
         return Drawing.Color.FromArgb(r, g, b);
     }
 

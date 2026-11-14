@@ -28,6 +28,8 @@ public sealed class MicCustomizeDialog : FluentWindow
     private readonly System.Windows.Controls.CheckBox _setVolume = new();
     private readonly TextBlock _volumeText = new() { Width = 48, VerticalAlignment = VerticalAlignment.Center };
 
+    private readonly WrapPanel _colors = new();
+    private string? _color;
     private string? _iconKey;
     private string? _iconPath;
 
@@ -36,6 +38,7 @@ public sealed class MicCustomizeDialog : FluentWindow
         _slot = slot;
         _iconKey = slot.IconKey;
         _iconPath = slot.IconPath;
+        _color = slot.Color;
 
         FlowDirection = Loc.Direction;
         Title = Loc.T("Customize_Title");
@@ -97,6 +100,29 @@ public sealed class MicCustomizeDialog : FluentWindow
         _error.TextWrapping = TextWrapping.Wrap;
         root.Children.Add(_error);
 
+        root.Children.Add(Label(Loc.T("Customize_Color")));
+        var auto = new ToggleButton { Content = Loc.T("Customize_ColorAuto"), Height = 32, Margin = new Thickness(0, 0, 8, 8), Padding = new Thickness(10, 0, 10, 0), Tag = null };
+        auto.Click += (_, _) => { _color = null; SyncColors(); };
+        _colors.Children.Add(auto);
+        foreach (var rgb in MicColors.Rgb)
+        {
+            string hex = MicColors.ToHex(rgb);
+            var swatch = new ToggleButton
+            {
+                Width = 32,
+                Height = 32,
+                Margin = new Thickness(0, 0, 8, 8),
+                Tag = hex,
+                Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(rgb.R, rgb.G, rgb.B)),
+                ToolTip = hex,
+            };
+            swatch.Click += (_, _) => { _color = hex; SyncColors(); };
+            _colors.Children.Add(swatch);
+        }
+
+        root.Children.Add(_colors);
+        SyncColors();
+
         _fallback.Content = Loc.T("Customize_Fallback");
         _fallback.IsChecked = slot.Fallback;
         _fallback.Margin = new Thickness(0, 16, 0, 0);
@@ -157,6 +183,7 @@ public sealed class MicCustomizeDialog : FluentWindow
     public string? ResultLabel => string.IsNullOrWhiteSpace(_name.Text) ? null : _name.Text.Trim();
     public string? ResultIconKey => _iconKey;
     public string? ResultIconPath => _iconPath;
+    public string? ResultColor => _color;
     public bool ResultFallback => _fallback.IsChecked == true;
     public string? ResultOutputId => (_output.SelectedItem as OutputItem)?.Id;
     public string? ResultOutputName => ResultOutputId is null ? null : (_output.SelectedItem as OutputItem)?.Name;
@@ -170,6 +197,14 @@ public sealed class MicCustomizeDialog : FluentWindow
         var block = new TextBlock { Text = text, FontSize = 12, Margin = new Thickness(0, 6, 0, 0), TextWrapping = TextWrapping.Wrap };
         block.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
         return block;
+    }
+
+    private void SyncColors()
+    {
+        foreach (ToggleButton b in _colors.Children)
+        {
+            b.IsChecked = (string?)b.Tag == _color;
+        }
     }
 
     private void SyncVolume()

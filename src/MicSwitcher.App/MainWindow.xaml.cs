@@ -69,6 +69,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             RefreshTimeline();
         };
 
+        RestorePlacement();
         IsVisibleChanged += OnVisibleChanged;
         Loaded += (_, _) => AppTheme.Apply(_settings.Theme, this);
 
@@ -91,8 +92,48 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     /// Closing really closes (and frees) the window; the app keeps running in the tray and builds a fresh window
     /// next time. This also means no stale window can survive sleep/wake.
     /// </summary>
+    private void RestorePlacement()
+    {
+        if (_settings.WindowLeft is not double left || _settings.WindowTop is not double top)
+        {
+            return;
+        }
+
+        double width = _settings.WindowWidth is double w && w >= MinWidth ? w : Width;
+        double height = _settings.WindowHeight is double h && h >= MinHeight ? h : Height;
+
+        // Only restore when most of the window would be on a screen (monitors may have been unplugged).
+        double vsLeft = SystemParameters.VirtualScreenLeft, vsTop = SystemParameters.VirtualScreenTop;
+        double vsRight = vsLeft + SystemParameters.VirtualScreenWidth, vsBottom = vsTop + SystemParameters.VirtualScreenHeight;
+        if (left < vsLeft - 20 || top < vsTop - 20 || left + 200 > vsRight || top + 100 > vsBottom)
+        {
+            return;
+        }
+
+        WindowStartupLocation = WindowStartupLocation.Manual;
+        Left = left;
+        Top = top;
+        Width = width;
+        Height = Math.Min(height, SystemParameters.VirtualScreenHeight);
+    }
+
+    private void SavePlacement()
+    {
+        if (WindowState != WindowState.Normal)
+        {
+            return;
+        }
+
+        _settings.WindowLeft = Math.Round(Left);
+        _settings.WindowTop = Math.Round(Top);
+        _settings.WindowWidth = Math.Round(Width);
+        _settings.WindowHeight = Math.Round(Height);
+        _s.Persist();
+    }
+
     protected override void OnClosing(CancelEventArgs e)
     {
+        SavePlacement();
         _calibrationCts?.Cancel();
         _deviceTimer.Stop();
         AppLog.LineAdded -= OnLogLine;
@@ -465,6 +506,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         slot.IconKey = dialog.ResultIconKey;
         slot.IconPath = dialog.ResultIconPath;
         slot.Fallback = dialog.ResultFallback;
+        slot.Color = dialog.ResultColor;
         slot.OutputDeviceId = dialog.ResultOutputId;
         slot.OutputDeviceName = dialog.ResultOutputName;
         slot.OutputVolumePercent = dialog.ResultVolume;
@@ -535,7 +577,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
     {
         int activeIndex = status.ActiveMicId is null ? -1 : _settings.IndexOfMic(status.ActiveMicId);
         ActiveText.Text = activeIndex < 0 ? Loc.T("Status_NoneOfYourMics") : _settings.MicName(status.ActiveMicId!);
-        StatusDot.Fill = status.Paused || activeIndex < 0 ? NoneBrush : MicColors.BrushAt(activeIndex);
+        StatusDot.Fill = status.Paused || activeIndex < 0 ? NoneBrush : MicColors.BrushFor(_settings.Mics[activeIndex], activeIndex);
 
         DetailText.Text = _settings.Mics.All(m => m.DeviceId is null) ? Loc.T("Status_ChooseMics") : status.Message;
         ReleaseLockButton.Visibility = status.LockedMicId is null ? Visibility.Collapsed : Visibility.Visible;
@@ -561,8 +603,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             {
                 string prefix = status.ActiveMicId == slot.Id ? Loc.T("Badge_Default") + " · " : string.Empty;
                 bool voice = state.Voice;
-                row.SetBadge(prefix + Loc.T(voice ? "Badge_Voice" : slot.Fallback ? "Badge_Connected" : "Badge_Quiet"),
-                    voice ? BadgeKind.Good : BadgeKind.Muted);
+                string key = voice ? "Badge_Voice" : state.Noise ? "Badge_Noise" : slot.Fallback ? "Badge_Connected" : "Badge_Quiet";
+                row.SetBadge(prefix + Loc.T(key), voice ? BadgeKind.Good : BadgeKind.Muted);
             }
         }
 
@@ -608,7 +650,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         foreach (HistorySegment segment in segments)
         {
             int index = _settings.IndexOfMic(segment.MicId);
-            Brush brush = index < 0 ? NoneBrush : MicColors.BrushAt(index);
+            Brush brush = index < 0 ? NoneBrush : MicColors.BrushFor(_settings.Mics[index], index);
             AddSegment(segment.Length.TotalSeconds, brush, $"{segment.MicName} — {FormatSpan(segment.Length)}");
 
             if (index >= 0 && listed.Add(segment.MicId))

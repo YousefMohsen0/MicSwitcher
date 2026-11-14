@@ -46,7 +46,7 @@ public sealed class SetupWizard : FluentWindow
         _settings = services.Settings;
 
         Width = 600;
-        Height = 640;
+        Height = 580;
         ResizeMode = ResizeMode.NoResize;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         ExtendsContentIntoTitleBar = true;
@@ -96,6 +96,7 @@ public sealed class SetupWizard : FluentWindow
         _next.Content = Loc.T(_index == LastPage ? "Setup_Finish" : "Setup_Next");
         _stepText.Text = Loc.F("Setup_Step", _index + 1, LastPage + 1);
 
+        DetachFooter();
         var footer = new DockPanel { Margin = new Thickness(24, 8, 24, 20), LastChildFill = false };
         var buttons = new StackPanel { Orientation = Orientation.Horizontal };
         _back.Margin = new Thickness(0, 0, 8, 0);
@@ -104,7 +105,6 @@ public sealed class SetupWizard : FluentWindow
         DockPanel.SetDock(buttons, Dock.Right);
         footer.Children.Add(buttons);
         footer.Children.Add(_stepText);
-        DetachFooter();
 
         var scroll = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = body, Padding = new Thickness(24, 0, 24, 0) };
         var layout = new Grid();

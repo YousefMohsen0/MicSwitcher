@@ -8,7 +8,7 @@ using MicSwitcher.Core;
 namespace MicSwitcher.App;
 
 /// <summary>State of one managed mic, for the UI.</summary>
-public sealed record MicStatus(string Id, bool Present, bool Voice);
+public sealed record MicStatus(string Id, bool Present, bool Voice, bool Noise = false);
 
 /// <summary>What the UI and tray need to know about the current state.</summary>
 public sealed class ControllerStatus
@@ -27,7 +27,7 @@ public sealed class ControllerStatus
         Message = message;
         LockedMicId = lockedMicId;
         LockUntil = lockUntil;
-        Signature = string.Join('|', mics.Select(m => $"{m.Id}:{(m.Present ? 1 : 0)}{(m.Voice ? 1 : 0)}"))
+        Signature = string.Join('|', mics.Select(m => $"{m.Id}:{(m.Present ? 1 : 0)}{(m.Voice ? 1 : 0)}{(m.Noise ? 1 : 0)}"))
             + $"#{activeMicId}#{paused}#{message}#{lockedMicId}#{lockUntil?.Ticks}";
     }
 
@@ -61,6 +61,7 @@ public sealed class SwitchController : IDisposable
         public readonly BleedEstimator Bleed = new();
         public double PeakDb = LevelMeter.FloorDb;
         public double ThresholdDb = -45;
+        public long NoiseAtMs = -10_000;
     }
 
     private readonly AppSettings _settings;
@@ -314,6 +315,10 @@ public sealed class SwitchController : IDisposable
             if (profile.SmartVoice && !rt.Gate.Process(speechLike, blockMs))
             {
                 measured = LevelMeter.FloorDb; // loud but not speech-shaped: treat as silence for the detector
+                if (levelDb >= effective)
+                {
+                    rt.NoiseAtMs = _clock.ElapsedMilliseconds;
+                }
             }
 
             // The detector's own threshold is the effective one for this block.
@@ -453,7 +458,8 @@ public sealed class SwitchController : IDisposable
                 .Select(m => new MicStatus(
                     m.Id,
                     m.DeviceId is not null && _activeDeviceIds.Contains(m.DeviceId),
-                    _runtime.TryGetValue(m.Id, out MicRuntime? rt) && rt.Detector.IsVoice))
+                    _runtime.TryGetValue(m.Id, out MicRuntime? rt) && rt.Detector.IsVoice,
+                    rt is not null && _clock.ElapsedMilliseconds - rt.NoiseAtMs < 600))
                 .ToArray();
         }
 

@@ -70,9 +70,11 @@ public sealed class VoiceCommandService : IDisposable
             }
 
             var engine = new SpeechRecognitionEngine(info);
-            engine.LoadGrammar(new Grammar(new GrammarBuilder(new Choices(phrases.Distinct().ToArray()))));
+            var builder = new GrammarBuilder(new Choices(phrases.Distinct().ToArray())) { Culture = info.Culture };
+            engine.LoadGrammar(new Grammar(builder));
             engine.SetInputToDefaultAudioDevice();
             engine.SpeechRecognized += OnRecognized;
+            engine.SpeechRecognitionRejected += OnRejected;
             engine.RecognizeAsync(RecognizeMode.Multiple);
             _engine = engine;
             AppLog.Info(Loc.F("Log_VoiceOn", info.Culture.Name));
@@ -98,6 +100,7 @@ public sealed class VoiceCommandService : IDisposable
         try
         {
             engine.SpeechRecognized -= OnRecognized;
+            engine.SpeechRecognitionRejected -= OnRejected;
             engine.RecognizeAsyncCancel();
             engine.Dispose();
         }
@@ -111,8 +114,11 @@ public sealed class VoiceCommandService : IDisposable
     {
         if (e.Result.Confidence < MinConfidence)
         {
+            AppLog.Info(Loc.F("Log_VoiceUnsure", e.Result.Text, $"{e.Result.Confidence:P0}"));
             return;
         }
+
+        AppLog.Info(Loc.F("Log_VoiceHeard", e.Result.Text));
 
         var mics = _settings.Mics.Select(m => (m.Id, _settings.MicName(m.Id))).ToList();
         var profiles = _settings.Profiles.Select(p => (p.Id, p.Name)).ToList();
@@ -122,6 +128,9 @@ public sealed class VoiceCommandService : IDisposable
             CommandHeard?.Invoke(command);
         }
     }
+
+    private static void OnRejected(object? sender, SpeechRecognitionRejectedEventArgs e) =>
+        AppLog.Info(Loc.T("Log_VoiceRejected"));
 
     public void Dispose() => Stop();
 }

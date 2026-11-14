@@ -321,6 +321,7 @@ public partial class MicSwitcherApp : Application
     private void OnVoiceCommand(VoiceCommand command)
     {
         AppLog.Info(Loc.F("Log_VoiceCommand", command.Kind));
+        _tray?.Notify(Loc.T("Notify_VoiceTitle"), Loc.T("VoiceCommand_" + command.Kind));
         switch (command.Kind)
         {
             case VoiceCommandKind.SwitchToMic:
