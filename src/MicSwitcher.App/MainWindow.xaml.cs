@@ -7,86 +7,47 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using MicSwitcher.App.Audio;
 using MicSwitcher.Core;
 
 namespace MicSwitcher.App;
 
-/// <summary>Settings window: mic selection, live meters, guided calibration, tuning and the activity log.</summary>
+/// <summary>Settings window: mics, live meters, switching options, history, calibration, shortcuts and more.</summary>
 public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 {
-    private const string MissingSuffix = " (not connected)";
-
-    private static readonly Brush ProBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0xA0, 0x43));
-    private static readonly Brush HeadsetBrush = new SolidColorBrush(Color.FromRgb(0xDB, 0x8F, 0x00));
-    private static readonly Brush LaptopBrush = new SolidColorBrush(Color.FromRgb(0xCF, 0x22, 0x2E));
+    private const int MaxMics = 10;
     private static readonly Brush NoneBrush = new SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80));
 
+    private readonly AppServices _s;
     private readonly AppSettings _settings;
     private readonly SwitchController _controller;
     private readonly AudioDeviceService _devices;
-    private readonly Action _persist;
-    private readonly Action<bool> _setPaused;
-    private readonly UpdateService _updates;
-    private readonly Dictionary<MicRole, MicRow> _rows;
+    private readonly Dictionary<string, MicRow> _rows = new();
     private readonly ObservableCollection<string> _logLines = new();
     private readonly DispatcherTimer _deviceTimer;
     private readonly object _calibrationLock = new();
 
     // True while the UI is being filled from settings, so change handlers do not write back.
     private bool _loading = true;
-    private bool _allowClose;
     private volatile bool _visible;
     private string _deviceSignature = string.Empty;
-    private List<double>? _proSink;
-    private List<double>? _headsetSink;
+    private IReadOnlyList<CaptureDevice> _inputDevices = Array.Empty<CaptureDevice>();
+    private Dictionary<string, List<double>>? _activeSinks;
     private CancellationTokenSource? _calibrationCts;
 
-    public MainWindow(
-        AppSettings settings,
-        SwitchController controller,
-        AudioDeviceService devices,
-        Action persist,
-        Action<bool> setPaused,
-        UpdateService updates)
+    public MainWindow(AppServices services)
     {
-        _updates = updates;
-        _settings = settings;
-        _controller = controller;
-        _devices = devices;
-        _persist = persist;
-        _setPaused = setPaused;
+        _s = services;
+        _settings = services.Settings;
+        _controller = services.Controller;
+        _devices = services.Devices;
 
+        FlowDirection = Loc.Direction;
         InitializeComponent();
-
-        _rows = new Dictionary<MicRole, MicRow>
-        {
-            [MicRole.Pro] = ProRow,
-            [MicRole.Headset] = HeadsetRow,
-            [MicRole.Laptop] = LaptopRow,
-        };
-
-        ProRow.Configure(
-            "Pro mic",
-            "Your main microphone. Used whenever it can hear you.",
-            Wpf.Ui.Controls.SymbolRegular.Mic24);
-        HeadsetRow.Configure(
-            "Headset mic",
-            "Takes over when a voice is heard on the headset and not on the pro mic.",
-            Wpf.Ui.Controls.SymbolRegular.Headphones24);
-        LaptopRow.Configure(
-            "Laptop mic",
-            "Last resort, only used when neither of the others is connected.",
-            Wpf.Ui.Controls.SymbolRegular.Laptop24);
-
-        foreach ((MicRole role, MicRow row) in _rows)
-        {
-            row.Combo.SelectionChanged += (_, _) => OnDeviceSelected(role);
-            row.EditRequested += (_, _) => CustomizeMic(role);
-            ApplyAppearance(role);
-        }
 
         LogList.ItemsSource = _logLines;
         foreach (string line in AppLog.Snapshot())
@@ -94,11 +55,19 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
             _logLines.Add(line);
         }
 
+        BuildLanguageCombo();
+        RebuildMicList();
+
         AppLog.LineAdded += OnLogLine;
         _controller.LevelMeasured += OnLevelMeasured;
+        _controller.History.Added += OnHistoryAdded;
 
         _deviceTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _deviceTimer.Tick += (_, _) => RefreshDeviceLists();
+        _deviceTimer.Tick += (_, _) =>
+        {
+            RefreshDeviceLists();
+            RefreshTimeline();
+        };
 
         IsVisibleChanged += OnVisibleChanged;
         Loaded += (_, _) => AppTheme.Apply(_settings.Theme, this);
@@ -109,11 +78,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         {
             UpdateStatus(status);
         }
+        else
+        {
+            ActiveText.Text = Loc.T("Status_Starting");
+        }
 
+        RefreshTimeline();
         _loading = false;
     }
-
-    public void AllowClose() => _allowClose = true;
 
     /// <summary>
     /// Closing really closes (and frees) the window; the app keeps running in the tray and builds a fresh window
@@ -125,6 +97,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _deviceTimer.Stop();
         AppLog.LineAdded -= OnLogLine;
         _controller.LevelMeasured -= OnLevelMeasured;
+        _controller.History.Added -= OnHistoryAdded;
         base.OnClosing(e);
     }
 
@@ -146,6 +119,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         {
             _deviceSignature = string.Empty;
             RefreshDeviceLists();
+            RefreshTimeline();
             _deviceTimer.Start();
         }
         else
@@ -158,35 +132,64 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    /// <summary>Re-reads everything from the settings (after the profile or mics changed elsewhere).</summary>
+    public void RefreshAll()
+    {
+        bool wasLoading = _loading;
+        _loading = true;
+        try
+        {
+            RebuildMicList();
+            LoadSettingsIntoControls();
+            RefreshDeviceLists();
+            RefreshTimeline();
+            if (_controller.LastStatus is ControllerStatus status)
+            {
+                UpdateStatus(status);
+            }
+        }
+        finally
+        {
+            _loading = wasLoading;
+        }
+    }
+
     private void LoadSettingsIntoControls()
     {
         bool wasLoading = _loading;
         _loading = true;
         try
         {
+            Profile profile = _settings.ActiveProfile;
+
             PauseCheck.IsChecked = _settings.Paused;
             AdjustGainCheck.IsChecked = _settings.AdjustGainOnCalibrate;
             CommsCheck.IsChecked = _settings.SwitchCommunicationsRole;
             StartupCheck.IsChecked = _settings.StartWithWindows;
-            BleedCheck.IsChecked = _settings.IgnoreBleed;
-            foreach (System.Windows.Controls.ComboBoxItem themeItem in ThemeCombo.Items)
-            {
-                if ((string)themeItem.Tag == AppTheme.Normalize(_settings.Theme))
-                {
-                    ThemeCombo.SelectedItem = themeItem;
-                }
-            }
+            NotifyCheck.IsChecked = _settings.NotifyOnSwitch;
+            BleedCheck.IsChecked = profile.IgnoreBleed;
+            SmartCheck.IsChecked = profile.SmartVoice;
+            VoiceCheck.IsChecked = _settings.VoiceCommandsEnabled;
+            WakeBox.Text = _settings.WakePhrase;
+
+            ProfileCombo.ItemsSource = null;
+            ProfileCombo.ItemsSource = _settings.Profiles;
+            ProfileCombo.SelectedItem = profile;
+
+            SelectByTag(ModeCombo, profile.Mode.ToString());
+            SelectByTag(ThemeCombo, AppTheme.Normalize(_settings.Theme));
+            SelectByTag(LanguageCombo, _settings.Language);
 
             AutoCheckCheck.IsChecked = _settings.AutoCheckUpdates;
             AutoInstallCheck.IsChecked = _settings.AutoInstallUpdates;
             PrereleaseCheck.IsChecked = _settings.IncludePrereleases;
-            UpdateInfoText.Text = $"Version {UpdateService.CurrentVersion}";
+            UpdateInfoText.Text = Loc.F("Updates_Version", UpdateService.CurrentVersion);
 
-            ThresholdSlider.Value = _settings.VoiceThresholdDb;
-            HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
-            SilenceSlider.Value = _settings.SilenceTimeoutSeconds;
-            ReturnSlider.Value = _settings.ReturnDelayMs;
+            SilenceSlider.Value = profile.SilenceTimeoutSeconds;
+            ReturnSlider.Value = profile.ReturnDelayMs;
             UpdateSliderLabels();
+            UpdateModeHint();
+            UpdateHotkeySummary();
         }
         finally
         {
@@ -194,51 +197,128 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
+    private static void SelectByTag(ComboBox combo, string tag)
+    {
+        foreach (ComboBoxItem item in combo.Items)
+        {
+            if ((string)item.Tag == tag)
+            {
+                combo.SelectedItem = item;
+                return;
+            }
+        }
+    }
+
     private void UpdateSliderLabels()
     {
-        ThresholdValue.Text = $"{ThresholdSlider.Value:0} dB";
-        HeadsetThresholdValue.Text = $"{HeadsetThresholdSlider.Value:0} dB";
-        SilenceValue.Text = $"{SilenceSlider.Value:0.#} s";
+        SilenceValue.Text = $"{SilenceSlider.Value:0.0} s";
         ReturnValue.Text = $"{ReturnSlider.Value:0} ms";
+    }
 
-        ProRow.SetThreshold(ThresholdSlider.Value);
-        HeadsetRow.SetThreshold(HeadsetThresholdSlider.Value);
+    private void UpdateModeHint()
+    {
+        ModeHint.Text = Loc.T("ModeHint_" + _settings.ActiveProfile.Mode);
+        SilenceSlider.IsEnabled = _settings.ActiveProfile.Mode != SwitchMode.Manual;
+        ReturnSlider.IsEnabled = _settings.ActiveProfile.Mode != SwitchMode.Manual;
+    }
+
+    private void UpdateHotkeySummary() =>
+        HotkeySummary.Text = _settings.Hotkeys.Count == 0
+            ? Loc.T("Hotkeys_None")
+            : Loc.F("Hotkeys_Count", _settings.Hotkeys.Count) + "  " +
+              string.Join("  ·  ", _settings.Hotkeys.Take(4).Select(h => h.Gesture));
+
+    // ----- microphone list ------------------------------------------------------------------------------------
+
+    private void RebuildMicList()
+    {
+        MicList.Children.Clear();
+        _rows.Clear();
+
+        for (int i = 0; i < _settings.Mics.Count; i++)
+        {
+            MicSlot slot = _settings.Mics[i];
+            string id = slot.Id;
+            var row = new MicRow();
+            _rows[id] = row;
+
+            row.Combo.SelectionChanged += (_, _) => OnDeviceSelected(id);
+            row.EditRequested += (_, _) => CustomizeMic(id);
+            row.MoveUpRequested += (_, _) => MoveMic(id, -1);
+            row.MoveDownRequested += (_, _) => MoveMic(id, +1);
+            row.RemoveRequested += (_, _) => RemoveMic(id);
+            row.ThresholdChanged += db =>
+            {
+                if (_loading)
+                {
+                    return;
+                }
+
+                MicSlot? target = _settings.FindMic(id);
+                if (target is not null)
+                {
+                    target.VoiceThresholdDb = Math.Round(db, 1);
+                    _s.Persist();
+                }
+            };
+
+            ApplyRowAppearance(i);
+            row.SetThresholdValue(slot.VoiceThresholdDb);
+            row.SetMoveEnabled(i > 0, i < _settings.Mics.Count - 1);
+
+            MicList.Children.Add(new Wpf.Ui.Controls.Card { Margin = new Thickness(0, 0, 0, 10), Padding = new Thickness(20), Content = row });
+        }
+
+        NoMicsText.Visibility = _settings.Mics.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        AddMicButton.IsEnabled = _settings.Mics.Count < MaxMics;
+        _deviceSignature = string.Empty;
+        if (_inputDevices.Count > 0)
+        {
+            PopulateCombos(_inputDevices);
+        }
+    }
+
+    private void ApplyRowAppearance(int index)
+    {
+        MicSlot slot = _settings.Mics[index];
+        if (!_rows.TryGetValue(slot.Id, out MicRow? row))
+        {
+            return;
+        }
+
+        row.SetAppearance(slot.DisplayName(index), MicAppearance.SymbolOf(slot), MicAppearance.ImageOf(slot));
+        row.SetSubtitle(slot.Fallback
+            ? Loc.T("Row_FallbackHint")
+            : index == 0 ? Loc.T("Row_MainHint") : Loc.F("Row_PriorityHint", index + 1));
     }
 
     private void RefreshDeviceLists()
     {
-        if (_rows.Values.Any(r => r.Combo.IsDropDownOpen))
-        {
-            return; // do not yank the list away while the user is choosing
-        }
-
         IReadOnlyList<CaptureDevice> devices;
         try
         {
             devices = _devices.GetActiveCaptureDevices();
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            AppLog.Info($"Could not list the microphones: {ex.Message}");
             return;
         }
 
-        string signature = string.Join("|", devices.Select(d => d.Id))
-            + "#" + string.Join("|", _rows.Keys.Select(r => _settings.Get(r).DeviceId));
+        string signature = string.Join("|", devices.Select(d => d.Id)) + "#" + string.Join("|", _settings.Mics.Select(m => m.Id + m.DeviceId));
         if (signature == _deviceSignature)
         {
             return;
         }
 
         _deviceSignature = signature;
+        _inputDevices = devices;
 
         bool wasLoading = _loading;
         _loading = true;
         try
         {
-            foreach (MicRole role in _rows.Keys)
-            {
-                PopulateCombo(role, devices);
-            }
+            PopulateCombos(devices);
         }
         finally
         {
@@ -246,67 +326,160 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
     }
 
-    private void PopulateCombo(MicRole role, IReadOnlyList<CaptureDevice> devices)
+    private void PopulateCombos(IReadOnlyList<CaptureDevice> devices)
     {
-        var combo = _rows[role].Combo;
-        MicSettings saved = _settings.Get(role);
-
-        var items = new List<DeviceItem> { new(null, "(not set)") };
-        items.AddRange(devices.Select(d => new DeviceItem(d.Id, d.Name)));
-        if (saved.DeviceId is not null && devices.All(d => d.Id != saved.DeviceId))
+        foreach (MicSlot slot in _settings.Mics)
         {
-            items.Add(new DeviceItem(saved.DeviceId, (saved.DeviceName ?? "Unknown device") + MissingSuffix));
-        }
+            if (!_rows.TryGetValue(slot.Id, out MicRow? row))
+            {
+                continue;
+            }
 
-        combo.ItemsSource = items;
-        combo.SelectedItem = items.FirstOrDefault(i => i.Id == saved.DeviceId) ?? items[0];
+            var items = new List<DeviceItem> { new(null, Loc.T("Row_NotSet")) };
+            items.AddRange(devices.Select(d => new DeviceItem(d.Id, d.Name)));
+            if (slot.DeviceId is not null && devices.All(d => d.Id != slot.DeviceId))
+            {
+                items.Add(new DeviceItem(slot.DeviceId, (slot.DeviceName ?? Loc.T("Row_UnknownDevice")) + Loc.T("Row_MissingSuffix")));
+            }
+
+            bool wasLoading = _loading;
+            _loading = true;
+            row.Combo.ItemsSource = items;
+            row.Combo.SelectedItem = items.FirstOrDefault(i => i.Id == slot.DeviceId) ?? items[0];
+            _loading = wasLoading;
+        }
     }
 
-    private void OnDeviceSelected(MicRole role)
+    private void OnDeviceSelected(string micId)
     {
-        if (_loading || _rows[role].Combo.SelectedItem is not DeviceItem item)
+        if (_loading || !_rows.TryGetValue(micId, out MicRow? row) || row.Combo.SelectedItem is not DeviceItem item)
         {
             return;
         }
 
-        MicSettings target = _settings.Get(role);
-        if (item.Id == target.DeviceId)
+        MicSlot? slot = _settings.FindMic(micId);
+        if (slot is null || item.Id == slot.DeviceId)
         {
             return;
         }
 
-        target.DeviceId = item.Id;
-        target.DeviceName = item.Id is null ? null : item.Name;
+        slot.DeviceId = item.Id;
+        slot.DeviceName = item.Id is null ? null : item.Name;
 
-        if (item.Id is not null)
+        if (item.Id is not null && _settings.Mics.Any(m => m.Id != micId && m.DeviceId == item.Id))
         {
-            foreach (MicRole other in _rows.Keys.Where(r => r != role))
-            {
-                if (_settings.Get(other).DeviceId == item.Id)
-                {
-                    AppLog.Info($"Warning: the same device is assigned to the {role} and {other} mics.");
-                }
-            }
+            AppLog.Info(Loc.F("Log_SameDevice", item.Name));
         }
 
-        AppLog.Info($"{role} mic set to: {item.Name}");
+        AppLog.Info(Loc.F("Log_DeviceSet", _settings.MicName(micId), item.Name));
         _deviceSignature = string.Empty;
-        _persist();
+        int index = _settings.IndexOfMic(micId);
+        ApplyRowAppearance(index);
+        _s.Persist();
+    }
+
+    private void AddMicButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_settings.Mics.Count >= MaxMics)
+        {
+            return;
+        }
+
+        _settings.Mics.Add(new MicSlot());
+        _s.Persist();
+        RebuildMicList();
+    }
+
+    private void MoveMic(string id, int delta)
+    {
+        int index = _settings.IndexOfMic(id);
+        int target = index + delta;
+        if (index < 0 || target < 0 || target >= _settings.Mics.Count)
+        {
+            return;
+        }
+
+        (_settings.Mics[index], _settings.Mics[target]) = (_settings.Mics[target], _settings.Mics[index]);
+        _s.Persist();
+        RebuildMicList();
+    }
+
+    private void RemoveMic(string id)
+    {
+        MicSlot? slot = _settings.FindMic(id);
+        if (slot is null)
+        {
+            return;
+        }
+
+        MessageBoxResult answer = MessageBox.Show(
+            this,
+            Loc.F("Row_RemoveConfirm", _settings.MicName(id)),
+            "MicSwitcher",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        _settings.Mics.Remove(slot);
+        _settings.Hotkeys.RemoveAll(h => h.MicId == id);
+        _settings.Normalize();
+        _s.Persist();
+        _s.ApplyHotkeys();
+        RebuildMicList();
+        UpdateHotkeySummary();
+    }
+
+    private void CustomizeMic(string id)
+    {
+        MicSlot? slot = _settings.FindMic(id);
+        if (slot is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<CaptureDevice> outputs;
+        try
+        {
+            outputs = _devices.GetActiveRenderDevices();
+        }
+        catch (Exception)
+        {
+            outputs = Array.Empty<CaptureDevice>();
+        }
+
+        var dialog = new MicCustomizeDialog(slot, outputs) { Owner = this };
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        slot.Label = dialog.ResultLabel;
+        slot.IconKey = dialog.ResultIconKey;
+        slot.IconPath = dialog.ResultIconPath;
+        slot.Fallback = dialog.ResultFallback;
+        slot.OutputDeviceId = dialog.ResultOutputId;
+        slot.OutputDeviceName = dialog.ResultOutputName;
+        slot.OutputVolumePercent = dialog.ResultVolume;
+        _s.Persist();
+        RebuildMicList();
+        if (_controller.LastStatus is ControllerStatus status)
+        {
+            UpdateStatus(status);
+        }
     }
 
     // ----- live data from the controller ----------------------------------------------------------------------
 
-    private void OnLevelMeasured(MicRole role, double db)
+    private void OnLevelMeasured(string micId, double db)
     {
         lock (_calibrationLock)
         {
-            if (role == MicRole.Pro)
+            if (_activeSinks is not null && _activeSinks.TryGetValue(micId, out List<double>? sink))
             {
-                _proSink?.Add(db);
-            }
-            else if (role == MicRole.Headset)
-            {
-                _headsetSink?.Add(db);
+                sink.Add(db);
             }
         }
 
@@ -317,7 +490,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
-            if (_rows.TryGetValue(role, out MicRow? row))
+            if (_rows.TryGetValue(micId, out MicRow? row))
             {
                 row.SetLevel(db);
             }
@@ -343,47 +516,52 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }));
     }
 
-    public void UpdateStatus(ControllerStatus status)
+    private void OnHistoryAdded(SwitchEvent item)
     {
-        (string name, Brush dot) = status.ActiveRole switch
+        if (Dispatcher.HasShutdownStarted)
         {
-            MicRole.Pro => (MicAppearance.NameOf(_settings, MicRole.Pro), ProBrush),
-            MicRole.Headset => (MicAppearance.NameOf(_settings, MicRole.Headset), HeadsetBrush),
-            MicRole.Laptop => (MicAppearance.NameOf(_settings, MicRole.Laptop), LaptopBrush),
-            _ => ("None of your mics", NoneBrush),
-        };
+            return;
+        }
 
-        ActiveText.Text = name;
-        StatusDot.Fill = status.Paused ? NoneBrush : dot;
-
-        bool nothingConfigured = _rows.Keys.All(r => _settings.Get(r).DeviceId is null);
-        DetailText.Text = nothingConfigured
-            ? "Choose your microphones below to get started."
-            : status.Message;
-
-        SetBadge(ProRow, MicRole.Pro, status.ProPresent, status.ProVoice ? "voice" : "quiet", status);
-        SetBadge(HeadsetRow, MicRole.Headset, status.HeadsetPresent, status.HeadsetVoice ? "voice" : "quiet", status);
-        SetBadge(LaptopRow, MicRole.Laptop, status.LaptopPresent, "connected", status);
-        SyncPaused();
+        Dispatcher.BeginInvoke(new Action(RefreshTimeline));
     }
 
-    private void SetBadge(MicRow row, MicRole role, bool present, string presentText, ControllerStatus status)
+    public void UpdateStatus(ControllerStatus status)
     {
-        if (_settings.Get(role).DeviceId is null)
+        int activeIndex = status.ActiveMicId is null ? -1 : _settings.IndexOfMic(status.ActiveMicId);
+        ActiveText.Text = activeIndex < 0 ? Loc.T("Status_NoneOfYourMics") : _settings.MicName(status.ActiveMicId!);
+        StatusDot.Fill = status.Paused || activeIndex < 0 ? NoneBrush : MicColors.BrushAt(activeIndex);
+
+        DetailText.Text = _settings.Mics.All(m => m.DeviceId is null) ? Loc.T("Status_ChooseMics") : status.Message;
+        ReleaseLockButton.Visibility = status.LockedMicId is null ? Visibility.Collapsed : Visibility.Visible;
+
+        for (int i = 0; i < _settings.Mics.Count; i++)
         {
-            row.SetBadge(string.Empty, BadgeKind.Muted);
-            return;
+            MicSlot slot = _settings.Mics[i];
+            if (!_rows.TryGetValue(slot.Id, out MicRow? row))
+            {
+                continue;
+            }
+
+            MicStatus? state = status.Find(slot.Id);
+            if (slot.DeviceId is null)
+            {
+                row.SetBadge(string.Empty, BadgeKind.Muted);
+            }
+            else if (state?.Present != true)
+            {
+                row.SetBadge(Loc.T("Badge_NotFound"), BadgeKind.Problem);
+            }
+            else
+            {
+                string prefix = status.ActiveMicId == slot.Id ? Loc.T("Badge_Default") + " · " : string.Empty;
+                bool voice = state.Voice;
+                row.SetBadge(prefix + Loc.T(voice ? "Badge_Voice" : slot.Fallback ? "Badge_Connected" : "Badge_Quiet"),
+                    voice ? BadgeKind.Good : BadgeKind.Muted);
+            }
         }
 
-        if (!present)
-        {
-            row.SetBadge("not found", BadgeKind.Problem);
-            return;
-        }
-
-        string prefix = status.ActiveRole == role ? "★ default · " : string.Empty;
-        bool hearingVoice = presentText == "voice";
-        row.SetBadge(prefix + presentText, hearingVoice ? BadgeKind.Good : BadgeKind.Muted);
+        SyncPaused();
     }
 
     public void SyncPaused()
@@ -394,17 +572,75 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _loading = wasLoading;
     }
 
+    // ----- timeline -------------------------------------------------------------------------------------------
+
+    private void RefreshTimeline()
+    {
+        DateTime to = DateTime.UtcNow;
+        DateTime from = to - TimeSpan.FromHours(6);
+        IReadOnlyList<HistorySegment> segments = _controller.History.Segments(from, to);
+
+        TimelineHost.ColumnDefinitions.Clear();
+        TimelineHost.Children.Clear();
+        TimelineLegend.Children.Clear();
+
+        var listed = new HashSet<string>();
+        int column = 0;
+
+        void AddSegment(double seconds, Brush brush, string tip)
+        {
+            TimelineHost.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(Math.Max(1, seconds), GridUnitType.Star) });
+            var border = new Border { Background = brush, ToolTip = tip, Margin = new Thickness(column == 0 ? 0 : 1, 0, 0, 0), CornerRadius = new CornerRadius(3) };
+            Grid.SetColumn(border, column++);
+            TimelineHost.Children.Add(border);
+        }
+
+        if (segments.Count > 0 && segments[0].Start > from)
+        {
+            AddSegment((segments[0].Start - from).TotalSeconds, NoneBrush, Loc.T("History_Unknown"));
+        }
+
+        foreach (HistorySegment segment in segments)
+        {
+            int index = _settings.IndexOfMic(segment.MicId);
+            Brush brush = index < 0 ? NoneBrush : MicColors.BrushAt(index);
+            AddSegment(segment.Length.TotalSeconds, brush, $"{segment.MicName} — {FormatSpan(segment.Length)}");
+
+            if (index >= 0 && listed.Add(segment.MicId))
+            {
+                var legend = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 16, 4) };
+                legend.Children.Add(new System.Windows.Shapes.Ellipse { Width = 10, Height = 10, Fill = brush, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center });
+                legend.Children.Add(new TextBlock { Text = _settings.MicName(segment.MicId), FontSize = 12 });
+                TimelineLegend.Children.Add(legend);
+            }
+        }
+
+        TimelineHost.Visibility = segments.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        HistoryEmpty.Visibility = segments.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        HistoryList.ItemsSource = _controller.History.Snapshot()
+            .Reverse()
+            .Take(12)
+            .Select(e => $"{e.Time.ToLocalTime():HH:mm:ss}   {e.ToName} — {e.Reason}  ({Loc.T("Source_" + e.Source)})")
+            .ToList();
+    }
+
+    private static string FormatSpan(TimeSpan span) =>
+        span.TotalHours >= 1 ? $"{(int)span.TotalHours} h {span.Minutes} min"
+        : span.TotalMinutes >= 1 ? $"{(int)span.TotalMinutes} min"
+        : $"{(int)span.TotalSeconds} s";
+
     // ----- option handlers ------------------------------------------------------------------------------------
 
     private void PauseCheck_Changed(object sender, RoutedEventArgs e)
     {
-        if (_loading)
+        if (!_loading)
         {
-            return;
+            _s.SetPaused(PauseCheck.IsChecked == true);
         }
-
-        _setPaused(PauseCheck.IsChecked == true);
     }
+
+    private void ReleaseLockButton_Click(object sender, RoutedEventArgs e) => _controller.ReleaseLock();
 
     private void AdjustGainCheck_Changed(object sender, RoutedEventArgs e)
     {
@@ -414,105 +650,7 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _settings.AdjustGainOnCalibrate = AdjustGainCheck.IsChecked == true;
-        _persist();
-    }
-
-    private void ApplyAppearance(MicRole role) =>
-        _rows[role].SetAppearance(
-            MicAppearance.NameOf(_settings, role),
-            MicAppearance.SymbolOf(_settings, role),
-            MicAppearance.ImageOf(_settings, role));
-
-    private void CustomizeMic(MicRole role)
-    {
-        MicSettings mic = _settings.Get(role);
-        var dialog = new MicCustomizeDialog(role, mic) { Owner = this };
-        if (dialog.ShowDialog() != true)
-        {
-            return;
-        }
-
-        mic.Label = dialog.ResultLabel;
-        mic.IconKey = dialog.ResultIconKey;
-        mic.IconPath = dialog.ResultIconPath;
-        ApplyAppearance(role);
-        _persist();
-        if (_controller.LastStatus is ControllerStatus status)
-        {
-            UpdateStatus(status);
-        }
-    }
-
-    private void ThemeCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
-    {
-        if (_loading || ThemeCombo.SelectedItem is not System.Windows.Controls.ComboBoxItem item)
-        {
-            return;
-        }
-
-        _settings.Theme = (string)item.Tag;
-        AppTheme.Apply(_settings.Theme, this);
-        _persist();
-    }
-
-    private void BleedCheck_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loading)
-        {
-            return;
-        }
-
-        _settings.IgnoreBleed = BleedCheck.IsChecked == true;
-        _persist();
-    }
-
-    private void Updates_Changed(object sender, RoutedEventArgs e)
-    {
-        if (_loading)
-        {
-            return;
-        }
-
-        _settings.AutoCheckUpdates = AutoCheckCheck.IsChecked == true;
-        _settings.AutoInstallUpdates = AutoInstallCheck.IsChecked == true;
-        _settings.IncludePrereleases = PrereleaseCheck.IsChecked == true;
-        _persist();
-    }
-
-    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
-    {
-        UpdateButton.IsEnabled = false;
-        try
-        {
-            UpdateInfoText.Text = "Checking…";
-            ReleaseInfo? release = _updates.Available;
-            if (release is null)
-            {
-                release = await _updates.CheckAsync();
-            }
-
-            if (release is null)
-            {
-                UpdateInfoText.Text = $"You are up to date (version {UpdateService.CurrentVersion}).";
-                return;
-            }
-
-            UpdateInfoText.Text = $"Downloading {release.Tag}…";
-            bool started = await _updates.DownloadAndInstallAsync(release);
-            UpdateInfoText.Text = started ? "Installing… MicSwitcher will restart." : "The update could not be installed (see the log).";
-            if (started)
-            {
-                Application.Current.Shutdown();
-            }
-        }
-        catch (Exception ex)
-        {
-            UpdateInfoText.Text = "Could not check for updates: " + ex.Message;
-        }
-        finally
-        {
-            UpdateButton.IsEnabled = true;
-        }
+        _s.Persist();
     }
 
     private void CommsCheck_Changed(object sender, RoutedEventArgs e)
@@ -523,55 +661,199 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         }
 
         _settings.SwitchCommunicationsRole = CommsCheck.IsChecked == true;
-        _persist();
+        _s.Persist();
     }
 
-    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void NotifyCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading)
         {
             return;
         }
 
-        _settings.VoiceThresholdDb = Math.Round(ThresholdSlider.Value, 1);
-        UpdateSliderLabels();
-        _persist();
+        _settings.NotifyOnSwitch = NotifyCheck.IsChecked == true;
+        _s.Persist();
     }
 
-    private void HeadsetThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    private void BleedCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading)
         {
             return;
         }
 
-        _settings.HeadsetVoiceThresholdDb = Math.Round(HeadsetThresholdSlider.Value, 1);
-        UpdateSliderLabels();
-        _persist();
+        _settings.ActiveProfile.IgnoreBleed = BleedCheck.IsChecked == true;
+        _s.Persist();
+    }
+
+    private void SmartCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.ActiveProfile.SmartVoice = SmartCheck.IsChecked == true;
+        _s.Persist();
+    }
+
+    private void ProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ProfileCombo.SelectedItem is not Profile profile)
+        {
+            return;
+        }
+
+        _s.SwitchProfile(profile.Id);
+    }
+
+    private void ManageProfilesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new ProfilesDialog(_settings) { Owner = this };
+        dialog.ShowDialog();
+        _settings.Normalize();
+        _s.Persist();
+        RefreshAll();
+    }
+
+    private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ModeCombo.SelectedItem is not ComboBoxItem item)
+        {
+            return;
+        }
+
+        _settings.ActiveProfile.Mode = Enum.Parse<SwitchMode>((string)item.Tag);
+        UpdateModeHint();
+        _s.Persist();
     }
 
     private void SilenceSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
+        UpdateSliderLabels();
         if (_loading)
         {
             return;
         }
 
-        _settings.SilenceTimeoutSeconds = Math.Round(SilenceSlider.Value, 1);
-        UpdateSliderLabels();
-        _persist();
+        _settings.ActiveProfile.SilenceTimeoutSeconds = Math.Round(SilenceSlider.Value, 1);
+        _s.Persist();
     }
 
     private void ReturnSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        UpdateSliderLabels();
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.ActiveProfile.ReturnDelayMs = Math.Round(ReturnSlider.Value);
+        _s.Persist();
+    }
+
+    private void ThemeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || ThemeCombo.SelectedItem is not ComboBoxItem item)
+        {
+            return;
+        }
+
+        _settings.Theme = (string)item.Tag;
+        AppTheme.Apply(_settings.Theme, this);
+        _s.Persist();
+    }
+
+    private void BuildLanguageCombo()
+    {
+        LanguageCombo.Items.Clear();
+        LanguageCombo.Items.Add(new ComboBoxItem { Content = Loc.T("Language_Auto"), Tag = "auto" });
+        foreach (AppLanguage language in Loc.Languages)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            try
+            {
+                panel.Children.Add(new Image
+                {
+                    Source = new BitmapImage(new Uri("pack://application:,,,/" + language.FlagResource)),
+                    Width = 24,
+                    Height = 16,
+                    Margin = new Thickness(0, 0, 10, 0),
+                });
+            }
+            catch (Exception ex)
+            {
+                AppLog.Info($"Could not load the flag for {language.Code}: {ex.Message}");
+            }
+
+            panel.Children.Add(new TextBlock { Text = language.NativeName, VerticalAlignment = VerticalAlignment.Center });
+            LanguageCombo.Items.Add(new ComboBoxItem { Content = panel, Tag = language.Code });
+        }
+    }
+
+    private void LanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading || LanguageCombo.SelectedItem is not ComboBoxItem item)
+        {
+            return;
+        }
+
+        string code = (string)item.Tag;
+        if (code == _settings.Language)
+        {
+            return;
+        }
+
+        _settings.Language = code;
+        _s.Persist();
+        _s.LanguageChanged(); // rebuilds this window in the new language
+    }
+
+    private void HotkeysButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new HotkeysDialog(_settings) { Owner = this };
+        dialog.ShowDialog();
+        _s.Persist();
+        IReadOnlyList<string> failed = _s.ApplyHotkeys();
+        UpdateHotkeySummary();
+        if (failed.Count > 0)
+        {
+            MessageBox.Show(this, Loc.F("Hotkeys_Failed", string.Join(", ", failed)), "MicSwitcher", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void VoiceCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_loading)
         {
             return;
         }
 
-        _settings.ReturnDelayMs = Math.Round(ReturnSlider.Value);
-        UpdateSliderLabels();
-        _persist();
+        _settings.VoiceCommandsEnabled = VoiceCheck.IsChecked == true;
+        _s.Persist();
+        ApplyVoice();
+    }
+
+    private void WakeBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        string text = WakeBox.Text.Trim();
+        if (_loading || text.Length == 0 || text == _settings.WakePhrase)
+        {
+            WakeBox.Text = _settings.WakePhrase;
+            return;
+        }
+
+        _settings.WakePhrase = text;
+        _s.Persist();
+        ApplyVoice();
+    }
+
+    private void ApplyVoice()
+    {
+        string? error = _s.ApplyVoiceCommands();
+        VoiceStatus.Text = !_settings.VoiceCommandsEnabled ? string.Empty
+            : error is null ? Loc.F("Voice_Listening", _settings.WakePhrase)
+            : Loc.F("Voice_Error", error);
     }
 
     private async void StartupCheck_Changed(object sender, RoutedEventArgs e)
@@ -589,8 +871,8 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         if (error is null)
         {
             _settings.StartWithWindows = want;
-            _persist();
-            AppLog.Info(want ? "Start with Windows enabled" : "Start with Windows disabled");
+            _s.Persist();
+            AppLog.Info(Loc.T(want ? "Log_StartupOn" : "Log_StartupOff"));
             return;
         }
 
@@ -602,32 +884,125 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         _loading = false;
     }
 
+    private void Updates_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loading)
+        {
+            return;
+        }
+
+        _settings.AutoCheckUpdates = AutoCheckCheck.IsChecked == true;
+        _settings.AutoInstallUpdates = AutoInstallCheck.IsChecked == true;
+        _settings.IncludePrereleases = PrereleaseCheck.IsChecked == true;
+        _s.Persist();
+    }
+
+    private async void UpdateButton_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateButton.IsEnabled = false;
+        try
+        {
+            UpdateInfoText.Text = Loc.T("Updates_Checking");
+            ReleaseInfo? release = await _s.Updates.CheckAsync();
+
+            if (release is null)
+            {
+                UpdateInfoText.Text = Loc.F("Updates_UpToDate", UpdateService.CurrentVersion);
+                return;
+            }
+
+            UpdateInfoText.Text = Loc.F("Updates_Downloading", release.Tag);
+            bool started = await _s.Updates.DownloadAndInstallAsync(release);
+            UpdateInfoText.Text = Loc.T(started ? "Updates_Installing" : "Updates_Failed");
+            if (started)
+            {
+                Application.Current.Shutdown();
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateInfoText.Text = Loc.F("Updates_CheckFailed", ex.Message);
+        }
+        finally
+        {
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    // ----- help -----------------------------------------------------------------------------------------------
+
+    private void SetupButton_Click(object sender, RoutedEventArgs e) => _s.RerunSetup();
+
+    private string BuildReport() => Diagnostics.Build(_settings, _devices, _controller);
+
+    private void CopyDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Clipboard.SetText(BuildReport());
+            HelpStatus.Text = Loc.T("Help_Copied");
+        }
+        catch (Exception ex)
+        {
+            HelpStatus.Text = ex.Message;
+        }
+    }
+
+    private void SaveDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = $"MicSwitcher-diagnostics-{DateTime.Now:yyyyMMdd-HHmm}.txt",
+            Filter = "Text (*.txt)|*.txt",
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            System.IO.File.WriteAllText(dialog.FileName, BuildReport());
+            HelpStatus.Text = Loc.F("Help_Saved", dialog.FileName);
+        }
+        catch (Exception ex)
+        {
+            HelpStatus.Text = ex.Message;
+        }
+    }
+
     // ----- guided calibration ---------------------------------------------------------------------------------
 
     private void CancelCalibrationButton_Click(object sender, RoutedEventArgs e) => _calibrationCts?.Cancel();
 
-    private async void CalibrateButton_Click(object sender, RoutedEventArgs e)
+    private async void CalibrateButton_Click(object sender, RoutedEventArgs e) => await RunCalibrationAsync();
+
+    /// <summary>Starts the guided calibration (used by the setup wizard's "calibrate now").</summary>
+    public void StartCalibration() => _ = Dispatcher.BeginInvoke(new Func<Task>(RunCalibrationAsync), DispatcherPriority.Loaded);
+
+    private async Task RunCalibrationAsync()
     {
-        string? proId = _settings.Pro.DeviceId;
-        if (proId is null || _controller.LastStatus?.ProPresent != true)
+        if (_calibrationCts is not null)
         {
-            MessageBox.Show(
-                this,
-                "Select your pro mic above (and make sure it is connected) before calibrating.",
-                "MicSwitcher",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
             return;
         }
 
-        bool useHeadset = _settings.Headset.DeviceId is not null && _controller.LastStatus?.HeadsetPresent == true;
-        int totalSteps = useHeadset ? 3 : 2;
+        ControllerStatus? status = _controller.LastStatus;
+        List<MicSlot> mics = _settings.Mics
+            .Where(m => !m.Fallback && m.DeviceId is not null && status?.Find(m.Id)?.Present == true)
+            .ToList();
 
-        var noisePro = new List<double>();
-        var noiseHeadset = new List<double>();
-        var speechPro = new List<double>();
-        var speechHeadset = new List<double>();
-        var proWhileHeadsetTalks = new List<double>();
+        if (mics.Count == 0)
+        {
+            MessageBox.Show(this, Loc.T("Calibration_NoMic"), "MicSwitcher", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        int totalSteps = 1 + mics.Count;
+        var noise = mics.ToDictionary(m => m.Id, _ => new List<double>());
+        var speech = mics.ToDictionary(m => m.Id, _ => new List<double>());
+        var interference = mics.ToDictionary(m => m.Id, _ => new List<double>());
 
         CalibrateButton.IsEnabled = false;
         CalibrationText.Text = string.Empty;
@@ -637,35 +1012,34 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
 
         try
         {
-            await RunPhaseAsync(
-                1, totalSteps, "Stay quiet", "Don't talk. Measuring the background noise.",
-                leadInSeconds: 0.5, seconds: 3, token, proSink: noisePro, headsetSink: useHeadset ? noiseHeadset : null);
+            await RunPhaseAsync(1, totalSteps, Loc.T("Calibration_QuietTitle"), Loc.T("Calibration_QuietHint"),
+                leadInSeconds: 0.5, seconds: 3, token, noise);
 
-            await RunPhaseAsync(
-                2, totalSteps, "Speak into the pro mic",
-                "Say anything at your normal volume, for example count from one to ten.",
-                leadInSeconds: 1.5, seconds: 5, token, proSink: speechPro, headsetSink: null);
-
-            if (useHeadset)
+            for (int j = 0; j < mics.Count; j++)
             {
-                await RunPhaseAsync(
-                    3, totalSteps, "Now speak into the headset mic",
-                    "Wear the headset and talk the way you will when you use it.",
-                    leadInSeconds: 2, seconds: 5, token, proSink: proWhileHeadsetTalks, headsetSink: speechHeadset);
+                // While speaking into mic j, the mics above it in the list must not take that as their own voice.
+                var sinks = new Dictionary<string, List<double>> { [mics[j].Id] = speech[mics[j].Id] };
+                for (int i = 0; i < j; i++)
+                {
+                    sinks[mics[i].Id] = interference[mics[i].Id];
+                }
+
+                string name = _settings.MicName(mics[j].Id);
+                await RunPhaseAsync(2 + j, totalSteps, Loc.F("Calibration_SpeakTitle", name), Loc.T("Calibration_SpeakHint"),
+                    leadInSeconds: j == 0 ? 1.5 : 2, seconds: 5, token, sinks);
             }
 
-            ApplyCalibration(proId, useHeadset, noisePro, speechPro, proWhileHeadsetTalks, noiseHeadset, speechHeadset);
+            ApplyCalibration(mics, noise, speech, interference);
         }
         catch (OperationCanceledException)
         {
-            CalibrationText.Text = "Calibration cancelled. Nothing was changed.";
+            CalibrationText.Text = Loc.T("Calibration_Cancelled");
         }
         finally
         {
             lock (_calibrationLock)
             {
-                _proSink = null;
-                _headsetSink = null;
+                _activeSinks = null;
             }
 
             _calibrationCts?.Dispose();
@@ -684,10 +1058,9 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         double leadInSeconds,
         double seconds,
         CancellationToken token,
-        List<double>? proSink,
-        List<double>? headsetSink)
+        Dictionary<string, List<double>> sinks)
     {
-        CalibrationStepText.Text = $"STEP {step} OF {totalSteps}";
+        CalibrationStepText.Text = Loc.F("Calibration_Step", step, totalSteps);
         CalibrationTitleText.Text = title;
         CalibrationHintText.Text = hint;
         CalibrationProgress.Value = 0;
@@ -697,15 +1070,14 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         CountdownText.FontSize = 40;
         while (leadIn.Elapsed.TotalSeconds < leadInSeconds)
         {
-            CountdownText.Text = "Get ready…";
+            CountdownText.Text = Loc.T("Calibration_GetReady");
             await Task.Delay(50, token);
         }
 
         CountdownText.FontSize = 64;
         lock (_calibrationLock)
         {
-            _proSink = proSink;
-            _headsetSink = headsetSink;
+            _activeSinks = sinks;
         }
 
         var timer = Stopwatch.StartNew();
@@ -725,95 +1097,70 @@ public partial class MainWindow : Wpf.Ui.Controls.FluentWindow
         CalibrationProgress.Value = 1;
         lock (_calibrationLock)
         {
-            _proSink = null;
-            _headsetSink = null;
+            _activeSinks = null;
         }
     }
 
     private void ApplyCalibration(
-        string proId,
-        bool useHeadset,
-        List<double> noisePro,
-        List<double> speechPro,
-        List<double> proWhileHeadsetTalks,
-        List<double> noiseHeadset,
-        List<double> speechHeadset)
+        List<MicSlot> mics,
+        Dictionary<string, List<double>> noise,
+        Dictionary<string, List<double>> speech,
+        Dictionary<string, List<double>> interference)
     {
-        CalibrationResult pro = Calibration.Compute(
-            noisePro, speechPro, _settings.TargetSpeechDb, _settings.AdjustGainOnCalibrate,
-            interferenceLevelsDb: useHeadset ? proWhileHeadsetTalks : null);
+        var lines = new List<string>();
+        bool changedAnything = false;
 
-        if (!pro.Reliable)
+        for (int k = 0; k < mics.Count; k++)
         {
-            CalibrationText.Text = "Pro mic: " + (pro.Warning ?? "calibration failed.") + " Nothing was changed.";
-            return;
-        }
+            MicSlot mic = mics[k];
+            string name = _settings.MicName(mic.Id);
+            bool adjustGain = k == 0 && _settings.AdjustGainOnCalibrate;
+            List<double> others = interference[mic.Id];
 
-        double appliedGain = 0;
-        string gainNote = string.Empty;
-        if (_settings.AdjustGainOnCalibrate && Math.Abs(pro.GainDeltaDb) >= 0.5)
-        {
-            try
+            CalibrationResult result = Calibration.Compute(
+                noise[mic.Id], speech[mic.Id], _settings.TargetSpeechDb, adjustGain,
+                interferenceLevelsDb: others.Count > 0 ? others : null);
+
+            if (!result.Reliable)
             {
-                appliedGain = _devices.AdjustGainDb(proId, pro.GainDeltaDb);
-                gainNote = $" Input volume changed by {appliedGain:+0.#;-0.#} dB.";
+                lines.Add(Loc.F("Calibration_Unreliable", name, result.Warning ?? Loc.T("Calibration_Failed")));
+                continue;
             }
-            catch (Exception ex)
+
+            double appliedGain = 0;
+            string gainNote = string.Empty;
+            if (adjustGain && mic.DeviceId is not null && Math.Abs(result.GainDeltaDb) >= 0.5)
             {
-                gainNote = " The input volume could not be changed.";
-                AppLog.Info($"Could not change the input volume: {ex.Message}");
-            }
-        }
-
-        // The threshold assumed the full gain change; correct it by what was really applied.
-        double proThreshold = Clamp(pro.ThresholdDb - pro.GainDeltaDb + appliedGain, ThresholdSlider);
-        _settings.VoiceThresholdDb = proThreshold;
-
-        var lines = new List<string>
-        {
-            $"Pro mic: noise {pro.NoiseFloorDb:0} dB, speech {pro.SpeechLevelDb:0} dB, threshold {proThreshold:0} dB.{gainNote}",
-        };
-        if (pro.Warning is not null)
-        {
-            lines.Add("Pro mic: " + pro.Warning);
-        }
-
-        if (useHeadset)
-        {
-            CalibrationResult headset = Calibration.Compute(
-                noiseHeadset, speechHeadset, _settings.TargetSpeechDb, adjustGain: false);
-
-            if (headset.Reliable)
-            {
-                double headsetThreshold = Clamp(headset.ThresholdDb, HeadsetThresholdSlider);
-                _settings.HeadsetVoiceThresholdDb = headsetThreshold;
-                lines.Add($"Headset mic: noise {headset.NoiseFloorDb:0} dB, speech {headset.SpeechLevelDb:0} dB, threshold {headsetThreshold:0} dB.");
-                if (headset.Warning is not null)
+                try
                 {
-                    lines.Add("Headset mic: " + headset.Warning);
+                    appliedGain = _devices.AdjustGainDb(mic.DeviceId, result.GainDeltaDb);
+                    gainNote = " " + Loc.F("Calibration_GainChanged", $"{appliedGain:+0.#;-0.#}");
+                }
+                catch (Exception ex)
+                {
+                    gainNote = " " + Loc.T("Calibration_GainFailed");
+                    AppLog.Info($"Could not change the input volume: {ex.Message}");
                 }
             }
-            else
+
+            // The threshold assumed the full gain change; correct it by what was really applied.
+            mic.VoiceThresholdDb = Math.Clamp(Math.Round(result.ThresholdDb - result.GainDeltaDb + appliedGain, 1), -80, -10);
+            changedAnything = true;
+
+            lines.Add(Loc.F("Calibration_Line", name, $"{result.NoiseFloorDb:0}", $"{result.SpeechLevelDb:0}", $"{mic.VoiceThresholdDb:0}", gainNote));
+            if (result.Warning is not null)
             {
-                lines.Add("Headset mic: " + (headset.Warning ?? "calibration failed.") + " Its threshold was not changed.");
+                lines.Add($"{name}: {result.Warning}");
             }
         }
-        else
+
+        if (changedAnything)
         {
-            lines.Add("Headset mic: skipped (not set or not connected).");
+            _s.Persist();
+            RebuildMicList();
         }
 
-        _loading = true;
-        ThresholdSlider.Value = _settings.VoiceThresholdDb;
-        HeadsetThresholdSlider.Value = _settings.HeadsetVoiceThresholdDb;
-        UpdateSliderLabels();
-        _loading = false;
-        _persist();
-
         CalibrationText.Text = string.Join(Environment.NewLine, lines);
-        AppLog.Info($"Calibrated: pro threshold {_settings.VoiceThresholdDb:0} dB, headset threshold {_settings.HeadsetVoiceThresholdDb:0} dB");
+        AppLog.Info(Loc.T("Log_Calibrated"));
     }
-
-    private static double Clamp(double value, System.Windows.Controls.Slider slider) =>
-        Math.Clamp(Math.Round(value, 1), slider.Minimum, slider.Maximum);
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using NAudio.CoreAudioApi;
+using MicSwitcher.Core;
 using NAudio.Wave;
 
 namespace MicSwitcher.App.Audio;
@@ -44,8 +45,13 @@ public sealed class CaptureMonitor : IDisposable
     private readonly Dictionary<string, Session> _sessions = new();
     private readonly Dictionary<string, (string DeviceId, DateTime At)> _failures = new();
 
-    /// <summary>Raised on a capture thread: source key, level in dBFS, chunk length in milliseconds.</summary>
-    public event Action<string, double, double>? BlockMeasured;
+    /// <summary>Raised on a capture thread: source key, level in dBFS, chunk length in ms, whether it sounds like speech.</summary>
+    public event Action<string, double, double, bool>? BlockMeasured;
+
+    /// <summary>When true each chunk of a microphone is also checked for a speech-like spectrum (a little more CPU).</summary>
+    public volatile bool SpeechAnalysis;
+
+    [ThreadStatic] private static float[]? _monoScratch;
 
     /// <summary>
     /// Makes sure <paramref name="key"/> is being captured from <paramref name="deviceId"/>. Passing null stops that
@@ -207,7 +213,7 @@ public sealed class CaptureMonitor : IDisposable
             session.FormatKnown = true;
         }
 
-        Action<string, double, double>? handler = BlockMeasured;
+        Action<string, double, double, bool>? handler = BlockMeasured;
         if (handler is null)
         {
             return;
@@ -221,7 +227,16 @@ public sealed class CaptureMonitor : IDisposable
         for (int offset = 0; offset < total; offset += chunkBytes)
         {
             int count = Math.Min(chunkBytes, total - offset);
-            handler(key, LevelMeter.ComputeDb(e.Buffer, offset, count, f), count / bytesPerMs);
+            double db = LevelMeter.ComputeDb(e.Buffer, offset, count, f);
+            bool speechLike = true;
+            if (SpeechAnalysis && session.Kind == CaptureKind.Microphone && db > LevelMeter.FloorDb)
+            {
+                float[] mono = _monoScratch ??= new float[2048];
+                int frames = LevelMeter.ToMono(e.Buffer, offset, count, f, mono);
+                speechLike = SpeechAnalyzer.LooksLikeSpeech(mono.AsSpan(0, frames), f.SampleRate);
+            }
+
+            handler(key, db, count / bytesPerMs, speechLike);
         }
     }
 

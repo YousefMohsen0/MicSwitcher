@@ -7,79 +7,135 @@ using MicSwitcher.Core;
 
 namespace MicSwitcher.App;
 
+/// <summary>State of one managed mic, for the UI.</summary>
+public sealed record MicStatus(string Id, bool Present, bool Voice);
+
 /// <summary>What the UI and tray need to know about the current state.</summary>
-public sealed record ControllerStatus(
-    MicRole? ActiveRole,
-    bool ProPresent,
-    bool HeadsetPresent,
-    bool LaptopPresent,
-    bool ProVoice,
-    bool HeadsetVoice,
-    bool Paused,
-    string Message);
+public sealed class ControllerStatus
+{
+    public ControllerStatus(
+        string? activeMicId,
+        IReadOnlyList<MicStatus> mics,
+        bool paused,
+        string message,
+        string? lockedMicId,
+        DateTime? lockUntil)
+    {
+        ActiveMicId = activeMicId;
+        Mics = mics;
+        Paused = paused;
+        Message = message;
+        LockedMicId = lockedMicId;
+        LockUntil = lockUntil;
+        Signature = string.Join('|', mics.Select(m => $"{m.Id}:{(m.Present ? 1 : 0)}{(m.Voice ? 1 : 0)}"))
+            + $"#{activeMicId}#{paused}#{message}#{lockedMicId}#{lockUntil?.Ticks}";
+    }
+
+    public string? ActiveMicId { get; }
+    public IReadOnlyList<MicStatus> Mics { get; }
+    public bool Paused { get; }
+    public string Message { get; }
+    public string? LockedMicId { get; }
+    public DateTime? LockUntil { get; }
+
+    /// <summary>Changes whenever anything shown to the user changes; used to skip redundant UI updates.</summary>
+    public string Signature { get; }
+
+    public MicStatus? Find(string id) => Mics.FirstOrDefault(m => m.Id == id);
+}
 
 /// <summary>
-/// Glue between the pure <see cref="SwitchingEngine"/> and Windows: refreshes devices once per second,
-/// feeds audio levels into the voice detector, asks the engine for a decision ten times per second and applies it.
+/// Glue between the pure <see cref="MicEngine"/> and Windows: refreshes devices once per second, feeds audio levels into
+/// the voice detectors, asks the engine for a decision ten times per second and applies it.
 /// </summary>
 public sealed class SwitchController : IDisposable
 {
     private static readonly TimeSpan TickInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan DeviceRefreshInterval = TimeSpan.FromSeconds(1);
+    private const string PlaybackKey = "playback";
+
+    private sealed class MicRuntime
+    {
+        public readonly EnergyVoiceDetector Detector = new();
+        public readonly SpeechGate Gate = new();
+        public readonly BleedEstimator Bleed = new();
+        public double PeakDb = LevelMeter.FloorDb;
+        public double ThresholdDb = -45;
+    }
 
     private readonly AppSettings _settings;
     private readonly AudioDeviceService _devices;
     private readonly CaptureMonitor _monitor;
+    private readonly SwitchHistory _history;
     private readonly object _sync = new();
 
     // Separate lock so capture threads never wait on the (slower) device/engine lock; avoids a stop/start deadlock.
     private readonly object _detectorLock = new();
-    private readonly EnergyVoiceDetector _detector = new();
-    private readonly EnergyVoiceDetector _headsetDetector = new();
+    private readonly Dictionary<string, MicRuntime> _runtime = new();
     private readonly PlaybackTracker _playback = new();
-    private readonly BleedEstimator _proBleed = new();
-    private readonly BleedEstimator _headsetBleed = new();
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
     private double _renderVolumeDb;
     private volatile bool _suspended;
 
-    private SwitchingEngine _engine;
+    private MicEngine _engine;
     private Timer? _timer;
     private int _ticking;
     private DateTime _lastRefresh = DateTime.MinValue;
-    private HashSet<string> _activeIds = new();
-    private MicRole? _currentDefault;
+    private HashSet<string> _activeDeviceIds = new();
+    private string? _currentDefaultDeviceId;
     private bool _metersWanted;
     private ControllerStatus? _lastStatus;
-    private string _lastMessage = "Starting…";
+    private string _lastMessage = string.Empty;
+    private string? _lockedMicId;
+    private DateTime? _lockUntil;
+    private string? _lastAppliedProfileId;
 
-    public SwitchController(AppSettings settings, AudioDeviceService devices, CaptureMonitor monitor)
+    public SwitchController(AppSettings settings, AudioDeviceService devices, CaptureMonitor monitor, SwitchHistory history)
     {
         _settings = settings;
         _devices = devices;
         _monitor = monitor;
-        _engine = new SwitchingEngine(settings.ToEngineOptions());
-        ApplyDetectorSettings();
+        _history = history;
+        _engine = new MicEngine(settings.ToEngineOptions());
+        _monitor.BlockMeasured += OnBlock;
+        _lastMessage = Loc.T("Status_Starting");
     }
 
-    /// <summary>Raised from a background thread whenever the visible state changes.</summary>
+    /// <summary>Raised when what the user sees changes.</summary>
     public event Action<ControllerStatus>? StatusChanged;
 
-    /// <summary>Raised from a capture thread for every audio block of every monitored mic (role, dBFS).</summary>
-    public event Action<MicRole, double>? LevelMeasured;
+    /// <summary>Raised on a capture thread for every measured block of a mic: mic id, level in dBFS.</summary>
+    public event Action<string, double>? LevelMeasured;
+
+    /// <summary>Raised after the Windows default mic was changed by the app.</summary>
+    public event Action<SwitchEvent>? Switched;
 
     public ControllerStatus? LastStatus => _lastStatus;
+
+    public SwitchHistory History => _history;
+
+    public bool IsLocked => _lockedMicId is not null;
+    public string? LockedMicId => _lockedMicId;
 
     /// <summary>Playback level (dBFS, after volume) heard over the last moments; -100 when silent. For the UI.</summary>
     public double PlaybackDb => _playback.RecentLevelDb(_clock.ElapsedMilliseconds);
 
     /// <summary>The bleed coupling currently in effect for a mic (learned, capped by the calibrated value).</summary>
-    public double? CouplingFor(MicRole role) => role switch
+    public double? CouplingFor(string micId)
     {
-        MicRole.Pro => BleedGuard.ChooseCoupling(_proBleed.CouplingDb, _settings.ProBleedCouplingDb),
-        MicRole.Headset => BleedGuard.ChooseCoupling(_headsetBleed.CouplingDb, _settings.HeadsetBleedCouplingDb),
-        _ => null,
-    };
+        lock (_detectorLock)
+        {
+            return _runtime.TryGetValue(micId, out MicRuntime? rt)
+                ? BleedGuard.ChooseCoupling(rt.Bleed.CouplingDb, _settings.FindMic(micId)?.BleedCouplingDb)
+                : null;
+        }
+    }
+
+    public void Start()
+    {
+        ReloadSettings();
+        _timer = new Timer(_ => Tick(), null, TimeSpan.Zero, TickInterval);
+    }
 
     /// <summary>Stops listening and switching (computer going to sleep). <see cref="Resume"/> undoes it.</summary>
     public void Suspend()
@@ -98,66 +154,130 @@ public sealed class SwitchController : IDisposable
         }
     }
 
-    public void Start()
-    {
-        _monitor.BlockMeasured += OnBlock;
-        _timer = new Timer(_ => Tick(), null, TimeSpan.Zero, TickInterval);
-    }
-
-    /// <summary>Call after the settings object was modified (devices, thresholds, timings, pause).</summary>
+    /// <summary>Call after the settings (mics, profile, timings…) changed.</summary>
     public void ReloadSettings()
     {
         lock (_sync)
         {
-            _engine = new SwitchingEngine(_settings.ToEngineOptions());
-            ApplyDetectorSettings();
-            _lastRefresh = DateTime.MinValue; // force a device refresh on the next tick
+            _engine = new MicEngine(_settings.ToEngineOptions());
+            _monitor.SpeechAnalysis = _settings.ActiveProfile.SmartVoice;
+            _lastRefresh = DateTime.MinValue;
+
+            lock (_detectorLock)
+            {
+                var ids = _settings.Mics.Select(m => m.Id).ToHashSet();
+                foreach (string stale in _runtime.Keys.Where(k => !ids.Contains(k)).ToList())
+                {
+                    _runtime.Remove(stale);
+                }
+
+                foreach (MicSlot mic in _settings.Mics)
+                {
+                    if (!_runtime.TryGetValue(mic.Id, out MicRuntime? rt))
+                    {
+                        _runtime[mic.Id] = rt = new MicRuntime();
+                    }
+
+                    rt.Detector.ThresholdDb = mic.VoiceThresholdDb;
+                    rt.Detector.OnsetMs = _settings.VoiceOnsetMs;
+                    rt.Detector.HangoverMs = _settings.VoiceHangoverMs;
+                    rt.ThresholdDb = mic.VoiceThresholdDb;
+                    if (_lastAppliedProfileId != _settings.ActiveProfileId)
+                    {
+                        rt.Detector.Reset();
+                        rt.Gate.Reset();
+                    }
+                }
+            }
+
+            _lastAppliedProfileId = _settings.ActiveProfileId;
         }
     }
 
-    /// <summary>Headset and laptop levels are only captured while the settings window is open.</summary>
+    /// <summary>When the settings window is open all mics are metered so their levels can be shown.</summary>
     public void SetMetersWanted(bool wanted)
     {
         lock (_sync)
         {
+            if (_metersWanted == wanted)
+            {
+                return;
+            }
+
             _metersWanted = wanted;
             _lastRefresh = DateTime.MinValue;
         }
     }
 
-    /// <summary>Immediately makes <paramref name="role"/> the Windows default (manual override).</summary>
-    public void UseNow(MicRole role)
+    /// <summary>Makes a mic the Windows default right now. With <paramref name="lockFor"/> automatic switching stays off.</summary>
+    /// <param name="lockFor">null = no lock; <see cref="TimeSpan.MaxValue"/> = until released.</param>
+    public bool SwitchTo(string micId, string source, TimeSpan? lockFor = null)
     {
         lock (_sync)
         {
-            string? id = _settings.Get(role).DeviceId;
-            if (id is null || !_activeIds.Contains(id))
+            MicSlot? mic = _settings.FindMic(micId);
+            if (mic?.DeviceId is null)
             {
-                AppLog.Info($"Cannot use the {role} mic: it is not set or not connected.");
+                return false;
+            }
+
+            RefreshDevices(force: true);
+            if (!_activeDeviceIds.Contains(mic.DeviceId))
+            {
+                AppLog.Info(Loc.F("Log_NotConnected", _settings.MicName(micId)));
+                return false;
+            }
+
+            if (lockFor is TimeSpan span)
+            {
+                _lockedMicId = micId;
+                _lockUntil = span == TimeSpan.MaxValue ? null : DateTime.UtcNow + span;
+            }
+
+            Apply(mic, Loc.T("Reason_Manual"), source);
+            return true;
+        }
+    }
+
+    /// <summary>Goes back to automatic switching after a lock.</summary>
+    public void ReleaseLock()
+    {
+        lock (_sync)
+        {
+            if (_lockedMicId is null)
+            {
                 return;
             }
 
-            Apply(role, "manual selection");
+            _lockedMicId = null;
+            _lockUntil = null;
+            AppLog.Info(Loc.T("Log_LockReleased"));
         }
     }
 
-    private void ApplyDetectorSettings()
+    /// <summary>Switches to the next mic in the list that is connected (wraps around). Locks until released.</summary>
+    public void SwitchToNext(string source)
     {
-        lock (_detectorLock)
+        string? target = null;
+        lock (_sync)
         {
-            _detector.ThresholdDb = _settings.VoiceThresholdDb;
-            _detector.OnsetMs = _settings.VoiceOnsetMs;
-            _detector.HangoverMs = _settings.VoiceHangoverMs;
+            RefreshDevices(force: true);
+            List<MicSlot> usable = _settings.Mics
+                .Where(m => m.DeviceId is not null && _activeDeviceIds.Contains(m.DeviceId))
+                .ToList();
+            if (usable.Count == 0)
+            {
+                return;
+            }
 
-            _headsetDetector.ThresholdDb = _settings.HeadsetVoiceThresholdDb;
-            _headsetDetector.OnsetMs = _settings.VoiceOnsetMs;
-            _headsetDetector.HangoverMs = _settings.VoiceHangoverMs;
+            int current = usable.FindIndex(m => m.DeviceId == _currentDefaultDeviceId);
+            target = usable[(current + 1) % usable.Count].Id;
         }
+
+        SwitchTo(target, source, TimeSpan.MaxValue);
     }
 
-    private const string PlaybackKey = "playback";
-
-    private void OnBlock(string key, double levelDb, double blockMs)
+    private void OnBlock(string key, double levelDb, double blockMs, bool speechLike)
     {
         if (key == PlaybackKey)
         {
@@ -171,40 +291,41 @@ public sealed class SwitchController : IDisposable
             return;
         }
 
-        if (!Enum.TryParse(key, out MicRole role))
+        lock (_detectorLock)
         {
-            return;
-        }
-
-        if (role == MicRole.Pro || role == MicRole.Headset)
-        {
-            lock (_detectorLock)
+            if (!_runtime.TryGetValue(key, out MicRuntime? rt))
             {
-                bool isPro = role == MicRole.Pro;
-                EnergyVoiceDetector detector = isPro ? _detector : _headsetDetector;
-                double userThreshold = isPro ? _settings.VoiceThresholdDb : _settings.HeadsetVoiceThresholdDb;
-
-                if (_settings.IgnoreBleed)
-                {
-                    double playbackDb = _playback.RecentLevelDb(_clock.ElapsedMilliseconds);
-                    BleedEstimator estimator = isPro ? _proBleed : _headsetBleed;
-                    estimator.Observe(levelDb, playbackDb, blockMs);
-
-                    double? coupling = BleedGuard.ChooseCoupling(
-                        estimator.CouplingDb, isPro ? _settings.ProBleedCouplingDb : _settings.HeadsetBleedCouplingDb);
-                    detector.ThresholdDb = BleedGuard.EffectiveThresholdDb(
-                        userThreshold, playbackDb, coupling, _settings.BleedMarginDb);
-                }
-                else
-                {
-                    detector.ThresholdDb = userThreshold;
-                }
-
-                detector.Process(levelDb, blockMs);
+                return;
             }
+
+            Profile profile = _settings.ActiveProfile;
+            double threshold = rt.Detector.ThresholdDb;
+            double effective = threshold;
+            if (profile.IgnoreBleed)
+            {
+                double playbackDb = _playback.RecentLevelDb(_clock.ElapsedMilliseconds);
+                rt.Bleed.Observe(levelDb, playbackDb, blockMs);
+                double? coupling = BleedGuard.ChooseCoupling(rt.Bleed.CouplingDb, _settings.FindMic(key)?.BleedCouplingDb);
+                effective = BleedGuard.EffectiveThresholdDb(threshold, playbackDb, coupling, _settings.BleedMarginDb);
+            }
+
+            rt.ThresholdDb = effective;
+            double measured = levelDb;
+            if (profile.SmartVoice && !rt.Gate.Process(speechLike, blockMs))
+            {
+                measured = LevelMeter.FloorDb; // loud but not speech-shaped: treat as silence for the detector
+            }
+
+            // The detector's own threshold is the effective one for this block.
+            double saved = rt.Detector.ThresholdDb;
+            rt.Detector.ThresholdDb = effective;
+            rt.Detector.Process(measured, blockMs);
+            rt.Detector.ThresholdDb = saved;
+
+            rt.PeakDb = Math.Max(levelDb, rt.PeakDb - 0.04 * blockMs);
         }
 
-        LevelMeasured?.Invoke(role, levelDb);
+        LevelMeasured?.Invoke(key, levelDb);
     }
 
     private void Tick()
@@ -216,52 +337,9 @@ public sealed class SwitchController : IDisposable
 
         try
         {
-            DateTime now = DateTime.UtcNow;
-            string? decisionMessage = null;
-            ControllerStatus status;
-
             lock (_sync)
             {
-                if (now - _lastRefresh >= DeviceRefreshInterval)
-                {
-                    RefreshDevices();
-                    _lastRefresh = now;
-                }
-
-                MicState pro = StateOf(MicRole.Pro, _detector.IsVoice);
-                MicState headset = StateOf(MicRole.Headset, _headsetDetector.IsVoice);
-                MicState laptop = StateOf(MicRole.Laptop, false);
-
-                if (!_settings.Paused)
-                {
-                    SwitchDecision decision = _engine.Update(now, _currentDefault, pro, headset, laptop);
-                    if (decision.Target is MicRole target)
-                    {
-                        if (Apply(target, decision.Reason))
-                        {
-                            decisionMessage = decision.Reason;
-                        }
-                    }
-                    else if (_currentDefault is null)
-                    {
-                        decisionMessage = "No managed microphone is available";
-                    }
-                }
-
-                if (decisionMessage is not null)
-                {
-                    _lastMessage = decisionMessage;
-                }
-
-                status = new ControllerStatus(
-                    _currentDefault, pro.Present, headset.Present, laptop.Present, pro.Voice, headset.Voice,
-                    _settings.Paused, _settings.Paused ? "Automatic switching is paused" : _lastMessage);
-            }
-
-            if (!status.Equals(_lastStatus))
-            {
-                _lastStatus = status;
-                StatusChanged?.Invoke(status);
+                Evaluate();
             }
         }
         catch (Exception ex)
@@ -274,93 +352,196 @@ public sealed class SwitchController : IDisposable
         }
     }
 
-    private MicState StateOf(MicRole role, bool voice)
+    private void Evaluate()
     {
-        string? id = _settings.Get(role).DeviceId;
-        return new MicState(id is not null && _activeIds.Contains(id), voice);
+        RefreshDevices(force: false);
+        Profile profile = _settings.ActiveProfile;
+
+        bool Present(MicSlot m) => m.DeviceId is not null && _activeDeviceIds.Contains(m.DeviceId);
+        bool Excluded(MicSlot m) => profile.ExcludedMicIds.Contains(m.Id);
+
+        string? forced = _lockedMicId ?? profile.ForcedMicId;
+        bool needsVoice = profile.ForcedMicId is null && _lockedMicId is null && _settings.ToEngineOptions().Mode != SwitchMode.Manual;
+
+        // Which sources to listen to: the voice-driven engine needs the normal mics; the window wants everything.
+        foreach (MicSlot mic in _settings.Mics)
+        {
+            bool listen = Present(mic) && !_suspended && (_metersWanted || (needsVoice && !Excluded(mic) && !mic.Fallback));
+            _monitor.Ensure(mic.Id, listen ? mic.DeviceId : null, CaptureKind.Microphone);
+        }
+
+        // What the speakers/headphones are playing, so it is not mistaken for someone talking.
+        _monitor.Ensure(PlaybackKey, profile.IgnoreBleed && (needsVoice || _metersWanted) ? _devices.GetDefaultRenderId() : null, CaptureKind.Loopback);
+        _renderVolumeDb = _monitor.GetRenderVolumeDb(PlaybackKey) ?? 0;
+
+        if (_lockUntil is DateTime until && DateTime.UtcNow >= until)
+        {
+            _lockedMicId = null;
+            _lockUntil = null;
+            forced = profile.ForcedMicId;
+            AppLog.Info(Loc.T("Log_LockExpired"));
+        }
+
+        MicSlot? current = _settings.Mics.FirstOrDefault(m => m.DeviceId is not null && m.DeviceId == _currentDefaultDeviceId);
+        string message = _lastMessage;
+
+        if (!_settings.Paused)
+        {
+            MicSlot? forcedMic = _settings.FindMic(forced);
+            if (forced is not null && forcedMic is not null && Present(forcedMic))
+            {
+                if (current?.Id != forcedMic.Id)
+                {
+                    Apply(forcedMic, Loc.T(_lockedMicId is not null ? "Reason_Locked" : "Reason_Forced"), "auto");
+                    current = forcedMic;
+                }
+
+                message = Loc.F("Status_Locked", _settings.MicName(forcedMic.Id));
+            }
+            else
+            {
+                if (_lockedMicId is not null)
+                {
+                    // The locked mic is gone: fall back to automatic switching.
+                    _lockedMicId = null;
+                    _lockUntil = null;
+                }
+
+                MicInput[] inputs;
+                lock (_detectorLock)
+                {
+                    inputs = _settings.Mics
+                        .Select((m, index) => (m, index))
+                        .Where(x => !Excluded(x.m))
+                        .Select(x => new MicInput(
+                            x.m.Id,
+                            x.m.DisplayName(x.index),
+                            Present(x.m),
+                            _runtime.TryGetValue(x.m.Id, out MicRuntime? rt) && rt.Detector.IsVoice,
+                            _runtime.TryGetValue(x.m.Id, out MicRuntime? r2) ? r2.PeakDb - r2.ThresholdDb : 0,
+                            x.m.Fallback))
+                        .ToArray();
+                }
+
+                SwitchDecision decision = _engine.Update(DateTime.UtcNow, current?.Id, inputs);
+                if (decision.TargetId is not null && _settings.FindMic(decision.TargetId) is MicSlot target)
+                {
+                    Apply(target, decision.Reason, "auto");
+                    current = target;
+                }
+
+                message = current is null
+                    ? Loc.T(inputs.Any(i => i.Present) ? "Status_NoDefault" : "Status_NoMics")
+                    : Loc.F("Status_Using", _settings.MicName(current.Id));
+            }
+        }
+        else
+        {
+            message = Loc.T("Status_Paused");
+        }
+
+        _lastMessage = message;
+        Publish(current?.Id, message);
     }
 
-    /// <summary>Reads the device list and the Windows default, and keeps the capture streams in sync.</summary>
-    private void RefreshDevices()
+    private void Publish(string? activeId, string message)
+    {
+        MicStatus[] mics;
+        lock (_detectorLock)
+        {
+            mics = _settings.Mics
+                .Select(m => new MicStatus(
+                    m.Id,
+                    m.DeviceId is not null && _activeDeviceIds.Contains(m.DeviceId),
+                    _runtime.TryGetValue(m.Id, out MicRuntime? rt) && rt.Detector.IsVoice))
+                .ToArray();
+        }
+
+        var status = new ControllerStatus(activeId, mics, _settings.Paused, message, _lockedMicId, _lockUntil);
+        if (_lastStatus?.Signature == status.Signature)
+        {
+            return;
+        }
+
+        _lastStatus = status;
+        StatusChanged?.Invoke(status);
+    }
+
+    private void RefreshDevices(bool force)
+    {
+        if (!force && DateTime.UtcNow - _lastRefresh < DeviceRefreshInterval)
+        {
+            return;
+        }
+
+        _lastRefresh = DateTime.UtcNow;
+        try
+        {
+            _activeDeviceIds = _devices.GetActiveCaptureIds().ToHashSet();
+            _currentDefaultDeviceId = _devices.GetDefaultCaptureId();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info($"Could not read the audio devices: {ex.Message}");
+        }
+    }
+
+    private void Apply(MicSlot mic, string reason, string source)
+    {
+        if (mic.DeviceId is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _devices.SetDefaultCapture(mic.DeviceId, _settings.SwitchCommunicationsRole);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info(Loc.F("Log_SwitchFailed", _settings.MicName(mic.Id), ex.Message));
+            return;
+        }
+
+        _currentDefaultDeviceId = mic.DeviceId;
+        ApplyOutput(mic);
+
+        string name = _settings.MicName(mic.Id);
+        AppLog.Info(Loc.F("Log_Switched", name, reason));
+        var item = new SwitchEvent(DateTime.UtcNow, mic.Id, name, reason, source);
+        _history.Add(item);
+        Switched?.Invoke(item);
+    }
+
+    /// <summary>Optionally moves playback to the device (and volume) the user attached to this mic.</summary>
+    private void ApplyOutput(MicSlot mic)
     {
         try
         {
-            _activeIds = _devices.GetActiveCaptureIds().ToHashSet();
-            string? defaultId = _devices.GetDefaultCaptureId();
-
-            _currentDefault = null;
-            foreach (MicRole role in Enum.GetValues<MicRole>())
+            if (!string.IsNullOrEmpty(mic.OutputDeviceId))
             {
-                string? id = _settings.Get(role).DeviceId;
-                if (id is not null && id == defaultId)
-                {
-                    _currentDefault = role;
-                    break;
-                }
+                _devices.SetDefaultRender(mic.OutputDeviceId, _settings.SwitchCommunicationsRole);
             }
 
-            _monitor.Ensure(nameof(MicRole.Pro), PresentIdOrNull(MicRole.Pro), CaptureKind.Microphone);
-            // The headset mic is listened to continuously: the switching rule needs to know when a voice is on it.
-            _monitor.Ensure(nameof(MicRole.Headset), PresentIdOrNull(MicRole.Headset), CaptureKind.Microphone);
-            _monitor.Ensure(nameof(MicRole.Laptop), _metersWanted ? PresentIdOrNull(MicRole.Laptop) : null, CaptureKind.Microphone);
-
-            // What the speakers/headphones are playing, so it is not mistaken for someone talking.
-            _monitor.Ensure(PlaybackKey, _settings.IgnoreBleed ? _devices.GetDefaultRenderId() : null, CaptureKind.Loopback);
-            _renderVolumeDb = _monitor.GetRenderVolumeDb(PlaybackKey) ?? 0;
-
-            lock (_detectorLock)
+            if (mic.OutputVolumePercent is int percent)
             {
-                if (PresentIdOrNull(MicRole.Pro) is null)
+                string? target = !string.IsNullOrEmpty(mic.OutputDeviceId) ? mic.OutputDeviceId : _devices.GetDefaultRenderId();
+                if (target is not null)
                 {
-                    _detector.Reset();
-                    _proBleed.Reset();
-                }
-
-                if (PresentIdOrNull(MicRole.Headset) is null)
-                {
-                    _headsetDetector.Reset();
-                    _headsetBleed.Reset();
+                    _devices.SetVolumePercent(target, percent);
                 }
             }
         }
         catch (Exception ex)
         {
-            AppLog.Info($"Could not read audio devices: {ex.Message}");
-        }
-    }
-
-    private string? PresentIdOrNull(MicRole role)
-    {
-        string? id = _settings.Get(role).DeviceId;
-        return id is not null && _activeIds.Contains(id) ? id : null;
-    }
-
-    private bool Apply(MicRole role, string reason)
-    {
-        string? id = _settings.Get(role).DeviceId;
-        if (id is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            _devices.SetDefaultCapture(id, _settings.SwitchCommunicationsRole);
-            _currentDefault = role;
-            string name = _settings.Get(role).DeviceName ?? role.ToString();
-            AppLog.Info($"Default microphone → {role} ({name}): {reason}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            AppLog.Info($"Failed to switch to the {role} mic: {ex.Message}");
-            return false;
+            AppLog.Info($"Could not change the output: {ex.Message}");
         }
     }
 
     public void Dispose()
     {
-        _timer?.Dispose();
         _monitor.BlockMeasured -= OnBlock;
+        _timer?.Dispose();
+        _monitor.Dispose();
     }
 }

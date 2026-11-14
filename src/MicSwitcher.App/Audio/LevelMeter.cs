@@ -92,4 +92,34 @@ public static class LevelMeter
         double rms = Math.Sqrt(sumSquares / samples);
         return rms <= 1e-5 ? FloorDb : Math.Max(FloorDb, 20 * Math.Log10(rms));
     }
+
+    /// <summary>Averages the channels of a raw buffer into mono floats (-1..1). Returns the number of samples written.</summary>
+    public static int ToMono(byte[] buffer, int offset, int count, SampleFormat format, float[] destination)
+    {
+        int bytesPerSample = format.Bits / 8;
+        int channels = Math.Max(1, format.BlockAlign / Math.Max(1, bytesPerSample));
+        int frames = Math.Min(destination.Length, count / Math.Max(1, format.BlockAlign));
+
+        for (int frame = 0; frame < frames; frame++)
+        {
+            double sum = 0;
+            int frameStart = offset + frame * format.BlockAlign;
+            for (int ch = 0; ch < channels; ch++)
+            {
+                int o = frameStart + ch * bytesPerSample;
+                sum += format.IsFloat
+                    ? BitConverter.ToSingle(buffer, o)
+                    : format.Bits switch
+                    {
+                        16 => BitConverter.ToInt16(buffer, o) / 32768.0,
+                        32 => BitConverter.ToInt32(buffer, o) / 2147483648.0,
+                        _ => (((buffer[o] << 8) | (buffer[o + 1] << 16) | (buffer[o + 2] << 24)) >> 8) / 8388608.0,
+                    };
+            }
+
+            destination[frame] = (float)(sum / channels);
+        }
+
+        return frames;
+    }
 }

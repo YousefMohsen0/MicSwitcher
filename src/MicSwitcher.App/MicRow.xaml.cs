@@ -30,11 +30,46 @@ public partial class MicRow : UserControl
 
     public ComboBox Combo => DeviceCombo;
 
-    public void Configure(string title, string subtitle, Wpf.Ui.Controls.SymbolRegular icon)
+    public event EventHandler? MoveUpRequested;
+    public event EventHandler? MoveDownRequested;
+    public event EventHandler? RemoveRequested;
+
+    /// <summary>Raised when the user moves the threshold slider (not when it is set from code).</summary>
+    public event Action<double>? ThresholdChanged;
+
+    private bool _settingSlider;
+
+    private void UpButton_Click(object sender, RoutedEventArgs e) => MoveUpRequested?.Invoke(this, EventArgs.Empty);
+    private void DownButton_Click(object sender, RoutedEventArgs e) => MoveDownRequested?.Invoke(this, EventArgs.Empty);
+    private void RemoveButton_Click(object sender, RoutedEventArgs e) => RemoveRequested?.Invoke(this, EventArgs.Empty);
+
+    private void ThresholdSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        TitleText.Text = title;
-        SubtitleText.Text = subtitle;
-        RoleIcon.Symbol = icon;
+        ThresholdText.Text = $"{ThresholdSlider.Value:0} dB";
+        if (!_settingSlider)
+        {
+            ThresholdChanged?.Invoke(ThresholdSlider.Value);
+        }
+
+        SetThreshold(ThresholdSlider.Value);
+    }
+
+    /// <summary>Sets the slider (and the marker on the meter) without raising <see cref="ThresholdChanged"/>.</summary>
+    public void SetThresholdValue(double db)
+    {
+        _settingSlider = true;
+        ThresholdSlider.Value = Math.Clamp(db, ThresholdSlider.Minimum, ThresholdSlider.Maximum);
+        _settingSlider = false;
+        ThresholdText.Text = $"{ThresholdSlider.Value:0} dB";
+        SetThreshold(ThresholdSlider.Value);
+    }
+
+    public void SetSubtitle(string text) => SubtitleText.Text = text;
+
+    public void SetMoveEnabled(bool up, bool down)
+    {
+        UpButton.IsEnabled = up;
+        DownButton.IsEnabled = down;
     }
 
     /// <summary>Raised when the user clicks the pencil to rename the mic or change its icon.</summary>

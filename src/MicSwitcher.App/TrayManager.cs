@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using MicSwitcher.Core;
 using Drawing = System.Drawing;
@@ -7,106 +8,199 @@ using Forms = System.Windows.Forms;
 
 namespace MicSwitcher.App;
 
-/// <summary>System tray icon: shows which mic is active and offers pause / open / exit.</summary>
+/// <summary>What the tray menu can ask the rest of the app to do.</summary>
+public sealed record TrayActions(
+    Action Open,
+    Action<bool> SetPaused,
+    Action Exit,
+    Action<string> SwitchProfile,
+    Action<string, TimeSpan> SwitchToMic,
+    Action ReleaseLock);
+
+/// <summary>
+/// System tray icon: shows which mic is active and offers a quick switch menu (mics, profiles, pause, open, exit).
+/// The menu is rebuilt every time it opens, so it always reflects the current mics and profiles.
+/// </summary>
 public sealed class TrayManager : IDisposable
 {
-    private readonly Forms.NotifyIcon _notifyIcon;
-    private readonly Forms.ToolStripMenuItem _pauseItem;
-    private readonly Forms.ToolStripMenuItem _statusItem;
-    private readonly Dictionary<string, Drawing.Icon> _icons = new();
-    private readonly Action _openWindow;
-    private readonly Action<bool> _setPaused;
-    private readonly Action _exit;
-    private readonly Func<MicRole, string> _nameOf;
-    private bool _paused;
-
-    public TrayManager(Action openWindow, Action<bool> setPaused, Action exit, bool paused, Func<MicRole, string> nameOf)
+    private static readonly (int Minutes, string Key)[] LockChoices =
     {
-        _openWindow = openWindow;
-        _setPaused = setPaused;
-        _exit = exit;
-        _nameOf = nameOf;
-        _paused = paused;
+        (0, "Tray_LockUntilUnlock"), (10, "Tray_Lock10"), (30, "Tray_Lock30"), (60, "Tray_Lock60"),
+    };
 
-        _pauseItem = new Forms.ToolStripMenuItem(PauseText(paused));
-        _pauseItem.Click += (_, _) => _setPaused(!_paused);
+    private readonly Forms.NotifyIcon _notifyIcon;
+    private readonly Forms.ContextMenuStrip _menu;
+    private readonly Dictionary<string, Drawing.Icon> _icons = new();
+    private readonly AppSettings _settings;
+    private readonly SwitchController _controller;
+    private readonly TrayActions _actions;
+    private int _lockMinutes;
 
-        _statusItem = new Forms.ToolStripMenuItem("MicSwitcher") { Enabled = false };
-        _statusItem.Font = new Drawing.Font("Segoe UI Semibold", 9.5f);
+    public TrayManager(AppSettings settings, SwitchController controller, TrayActions actions)
+    {
+        _settings = settings;
+        _controller = controller;
+        _actions = actions;
 
-        var menu = new Forms.ContextMenuStrip
+        _menu = new Forms.ContextMenuStrip
         {
             Font = new Drawing.Font("Segoe UI", 9.5f),
             ShowImageMargin = false,
             ShowCheckMargin = false,
             Padding = new Forms.Padding(0, 6, 0, 6),
+            RightToLeft = Loc.Language.RightToLeft ? Forms.RightToLeft.Yes : Forms.RightToLeft.No,
         };
-        menu.Items.Add(_statusItem);
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("Open MicSwitcher", null, (_, _) => _openWindow());
-        menu.Items.Add(_pauseItem);
-        menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("Exit", null, (_, _) => _exit());
-        foreach (Forms.ToolStripItem item in menu.Items)
-        {
-            item.Padding = new Forms.Padding(2, 5, 2, 5);
-        }
-
-        ApplyTheme(menu);
-        menu.Opening += (_, _) => ApplyTheme(menu);
-        menu.HandleCreated += (_, _) => RoundCorners(menu.Handle);
+        _menu.Opening += (_, _) => Rebuild();
+        _menu.HandleCreated += (_, _) => RoundCorners(_menu.Handle);
 
         _notifyIcon = new Forms.NotifyIcon
         {
             Icon = GetIcon(Drawing.Color.Gray),
             Text = "MicSwitcher",
-            ContextMenuStrip = menu,
+            ContextMenuStrip = _menu,
             Visible = true,
         };
         _notifyIcon.MouseClick += (_, e) =>
         {
             if (e.Button == Forms.MouseButtons.Left)
             {
-                _openWindow();
+                _actions.Open();
             }
         };
+
+        Rebuild();
     }
 
-    private static string PauseText(bool paused) => paused ? "Resume automatic switching" : "Pause automatic switching";
-
-    public void SetPaused(bool paused)
+    /// <summary>Shows a small notification next to the tray icon.</summary>
+    public void Notify(string title, string text)
     {
-        _paused = paused;
-        _pauseItem.Text = PauseText(paused);
+        try
+        {
+            _notifyIcon.ShowBalloonTip(4000, title, text, Forms.ToolTipIcon.None);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Info($"Could not show a notification: {ex.Message}");
+        }
     }
 
     public void Update(ControllerStatus status)
     {
-        (string label, Drawing.Color color) = status.ActiveRole switch
-        {
-            MicRole.Pro => (_nameOf(MicRole.Pro), Drawing.Color.FromArgb(46, 160, 67)),
-            MicRole.Headset => (_nameOf(MicRole.Headset), Drawing.Color.FromArgb(219, 143, 0)),
-            MicRole.Laptop => (_nameOf(MicRole.Laptop), Drawing.Color.FromArgb(207, 34, 46)),
-            _ => ("No managed mic", Drawing.Color.Gray),
-        };
+        int index = status.ActiveMicId is null ? -1 : _settings.IndexOfMic(status.ActiveMicId);
+        string label = index < 0 ? Loc.T("Tray_NoMic") : _settings.MicName(status.ActiveMicId!);
+        Drawing.Color color = index < 0 ? Drawing.Color.Gray : ColorAt(index);
 
         if (status.Paused)
         {
             color = Drawing.Color.Gray;
-            label += " (paused)";
+            label += " " + Loc.T("Tray_PausedSuffix");
+        }
+        else if (status.LockedMicId is not null)
+        {
+            label += " " + Loc.T("Tray_LockedSuffix");
         }
 
         _notifyIcon.Icon = GetIcon(color);
-        _statusItem.Text = label;
 
         // NotifyIcon.Text is limited to 63 characters.
         string text = $"MicSwitcher: {label}";
         _notifyIcon.Text = text.Length <= 63 ? text : text[..63];
     }
 
+    private static Drawing.Color ColorAt(int index)
+    {
+        (byte r, byte g, byte b) = MicColors.At(index);
+        return Drawing.Color.FromArgb(r, g, b);
+    }
+
+    private void Rebuild()
+    {
+        ControllerStatus? status = _controller.LastStatus;
+        _menu.Items.Clear();
+
+        string header = "MicSwitcher";
+        if (status?.ActiveMicId is string active)
+        {
+            header = _settings.MicName(active);
+        }
+
+        var headerItem = new Forms.ToolStripMenuItem(header) { Enabled = false, Font = new Drawing.Font("Segoe UI Semibold", 9.5f) };
+        _menu.Items.Add(headerItem);
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+
+        TimeSpan lockFor = _lockMinutes == 0 ? TimeSpan.MaxValue : TimeSpan.FromMinutes(_lockMinutes);
+        for (int i = 0; i < _settings.Mics.Count; i++)
+        {
+            MicSlot mic = _settings.Mics[i];
+            MicStatus? state = status?.Find(mic.Id);
+            bool present = state?.Present == true;
+            bool isActive = status?.ActiveMicId == mic.Id;
+            string text = (isActive ? "●  " : "     ") + mic.DisplayName(i) + (present || mic.DeviceId is null ? string.Empty : "  — " + Loc.T("Tray_NotFound"));
+            var item = new Forms.ToolStripMenuItem(text) { Enabled = present };
+            string id = mic.Id;
+            item.Click += (_, _) => _actions.SwitchToMic(id, lockFor);
+            _menu.Items.Add(item);
+        }
+
+        if (_settings.Mics.Count > 0)
+        {
+            var keep = new Forms.ToolStripMenuItem(Loc.T("Tray_KeepFor"));
+            foreach ((int minutes, string key) in LockChoices)
+            {
+                int m = minutes;
+                var choice = new Forms.ToolStripMenuItem((_lockMinutes == m ? "●  " : "     ") + Loc.T(key));
+                choice.Click += (_, _) => _lockMinutes = m;
+                keep.DropDownItems.Add(choice);
+            }
+
+            _menu.Items.Add(keep);
+
+            if (status?.LockedMicId is not null)
+            {
+                _menu.Items.Add(Loc.T("Tray_BackToAuto"), null, (_, _) => _actions.ReleaseLock());
+            }
+
+            _menu.Items.Add(new Forms.ToolStripSeparator());
+        }
+
+        if (_settings.Profiles.Count > 1)
+        {
+            var profiles = new Forms.ToolStripMenuItem(Loc.T("Tray_Profile"));
+            foreach (Profile profile in _settings.Profiles)
+            {
+                string id = profile.Id;
+                var item = new Forms.ToolStripMenuItem((_settings.ActiveProfileId == id ? "●  " : "     ") + profile.Name);
+                item.Click += (_, _) => _actions.SwitchProfile(id);
+                profiles.DropDownItems.Add(item);
+            }
+
+            _menu.Items.Add(profiles);
+        }
+
+        bool paused = _settings.Paused;
+        _menu.Items.Add(Loc.T(paused ? "Tray_Resume" : "Tray_Pause"), null, (_, _) => _actions.SetPaused(!paused));
+        _menu.Items.Add(new Forms.ToolStripSeparator());
+        _menu.Items.Add(Loc.T("Tray_Open"), null, (_, _) => _actions.Open());
+        _menu.Items.Add(Loc.T("Tray_Exit"), null, (_, _) => _actions.Exit());
+
+        foreach (Forms.ToolStripItem item in _menu.Items)
+        {
+            item.Padding = new Forms.Padding(2, 5, 2, 5);
+        }
+
+        ApplyTheme(_menu);
+        foreach (Forms.ToolStripItem item in _menu.Items)
+        {
+            if (item is Forms.ToolStripMenuItem sub && sub.HasDropDownItems)
+            {
+                ApplyTheme(sub.DropDown);
+            }
+        }
+    }
+
     // ----- look: follows the Windows light/dark setting, flat with rounded corners on Windows 11 -----------------
 
-    private static void ApplyTheme(Forms.ContextMenuStrip menu)
+    private static void ApplyTheme(Forms.ToolStripDropDown menu)
     {
         bool light = AppTheme.IsLight;
         bool black = AppTheme.IsBlack;

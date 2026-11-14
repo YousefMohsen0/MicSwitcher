@@ -12,7 +12,7 @@
     <AssemblyName>MicSwitcher</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>0.3.2</Version>
+    <Version>1.0.0</Version>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <DebugType>none</DebugType>
     <ServerGarbageCollector>false</ServerGarbageCollector>
@@ -20,15 +20,18 @@
     <TieredPGO>false</TieredPGO>
     <TieredCompilation>true</TieredCompilation>
     <Product>MicSwitcher</Product>
-    <Description>Automatically switches the default Windows microphone between a pro mic, a headset mic and a laptop mic.</Description>
+    <Description>Automatically switches the default Windows microphone between your microphones, depending on which one you are talking into.</Description>
   </PropertyGroup>
 
   <ItemGroup>
     <Resource Include="Assets\app.ico" />
+    <Resource Include="Assets\flag-en.png" />
+    <Resource Include="Assets\flag-eg.png" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="NAudio" Version="2.2.1" />
+    <PackageReference Include="System.Speech" Version="8.0.0" />
     <PackageReference Include="WPF-UI" Version="3.0.5" />
     <ProjectReference Include="..\MicSwitcher.Core\MicSwitcher.Core.csproj" />
   </ItemGroup>

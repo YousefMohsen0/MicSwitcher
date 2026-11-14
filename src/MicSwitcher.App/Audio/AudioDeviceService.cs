@@ -84,6 +84,41 @@ public sealed class AudioDeviceService
         }
     }
 
+    /// <summary>Active playback devices (speakers, headphones).</summary>
+    public IReadOnlyList<CaptureDevice> GetActiveRenderDevices()
+    {
+        var result = new List<CaptureDevice>();
+        using var enumerator = new MMDeviceEnumerator();
+        foreach (MMDevice device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+        {
+            try
+            {
+                result.Add(new CaptureDevice(device.ID, device.FriendlyName));
+            }
+            catch (Exception ex) when (ex is COMException or InvalidOperationException)
+            {
+                // Vanished while being read.
+            }
+            finally
+            {
+                device.Dispose();
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Makes a playback device the Windows default (and optionally the default communications device).</summary>
+    public void SetDefaultRender(string deviceId, bool includeCommunications) => SetDefaultCapture(deviceId, includeCommunications);
+
+    /// <summary>Sets the master volume of a playback device (0–100 %).</summary>
+    public void SetVolumePercent(string deviceId, int percent)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        using MMDevice device = enumerator.GetDevice(deviceId);
+        device.AudioEndpointVolume.MasterVolumeLevelScalar = Math.Clamp(percent, 0, 100) / 100f;
+    }
+
     /// <summary>Makes a capture device the Windows default (and optionally the default communications device).</summary>
     public void SetDefaultCapture(string deviceId, bool includeCommunications)
     {

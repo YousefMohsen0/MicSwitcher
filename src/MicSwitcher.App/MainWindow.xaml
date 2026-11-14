@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
         xmlns:local="clr-namespace:MicSwitcher.App"
-        Title="MicSwitcher" Width="700" Height="880" MinWidth="560" MinHeight="520"
+        Title="MicSwitcher" Width="720" Height="900" MinWidth="560" MinHeight="520"
         WindowStartupLocation="CenterScreen"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
@@ -23,7 +23,7 @@
     </ui:TitleBar>
 
     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-      <StackPanel Margin="24,8,24,28" MaxWidth="760">
+      <StackPanel Margin="24,8,24,28" MaxWidth="780">
 
         <!-- Status -->
         <ui:Card Margin="0,0,0,14" Padding="22">
@@ -34,48 +34,123 @@
             </Grid.ColumnDefinitions>
 
             <StackPanel>
-              <TextBlock Text="ACTIVE MICROPHONE" FontSize="11" FontWeight="SemiBold"
+              <TextBlock Text="{local:T Status_Header}" FontSize="11" FontWeight="SemiBold"
                          Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
               <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                 <Ellipse x:Name="StatusDot" Width="14" Height="14" Fill="Gray" VerticalAlignment="Center" Margin="0,3,12,0"/>
-                <TextBlock x:Name="ActiveText" FontSize="28" FontWeight="SemiBold" Text="Starting…"/>
+                <TextBlock x:Name="ActiveText" FontSize="28" FontWeight="SemiBold"/>
               </StackPanel>
               <TextBlock x:Name="DetailText" Margin="0,6,0,0" TextWrapping="Wrap"
                          Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+              <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                <ui:Button x:Name="ReleaseLockButton" Content="{local:T Status_BackToAuto}" Visibility="Collapsed"
+                           Click="ReleaseLockButton_Click"/>
+              </StackPanel>
             </StackPanel>
 
             <ui:ToggleSwitch x:Name="PauseCheck" Grid.Column="1" VerticalAlignment="Top" Margin="16,0,0,0"
-                             Content="Pause switching"
+                             Content="{local:T Status_Pause}"
                              Checked="PauseCheck_Changed" Unchecked="PauseCheck_Changed"/>
           </Grid>
         </ui:Card>
 
         <!-- Microphones -->
-        <TextBlock Text="Microphones" FontSize="18" FontWeight="SemiBold" Margin="2,6,0,10"/>
+        <TextBlock Text="{local:T Section_Mics}" FontSize="18" FontWeight="SemiBold" Margin="2,6,0,10"/>
+        <StackPanel x:Name="MicList"/>
+        <TextBlock x:Name="NoMicsText" Text="{local:T Mics_Empty}" TextWrapping="Wrap" Margin="2,0,0,10"
+                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+        <ui:Button x:Name="AddMicButton" Content="{local:T Mics_Add}" Margin="0,0,0,18" Click="AddMicButton_Click"/>
 
-        <ui:Card Margin="0,0,0,10" Padding="20">
-          <local:MicRow x:Name="ProRow"/>
+        <!-- Switching -->
+        <TextBlock Text="{local:T Section_Switching}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <StackPanel>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="220"/>
+                <ColumnDefinition Width="Auto"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{local:T Switching_Profile}" VerticalAlignment="Center"/>
+              <ComboBox x:Name="ProfileCombo" Grid.Column="1" DisplayMemberPath="Name"
+                        SelectionChanged="ProfileCombo_SelectionChanged"/>
+              <ui:Button Grid.Column="2" Margin="8,0,0,0" Content="{local:T Switching_ManageProfiles}"
+                         Click="ManageProfilesButton_Click"/>
+            </Grid>
+
+            <Grid Margin="0,14,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="220"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{local:T Switching_Mode}" VerticalAlignment="Center"/>
+              <ComboBox x:Name="ModeCombo" Grid.Column="1" SelectionChanged="ModeCombo_SelectionChanged">
+                <ComboBoxItem Content="{local:T Mode_Priority}" Tag="Priority"/>
+                <ComboBoxItem Content="{local:T Mode_Loudest}" Tag="Loudest"/>
+                <ComboBoxItem Content="{local:T Mode_Manual}" Tag="Manual"/>
+              </ComboBox>
+            </Grid>
+            <TextBlock x:Name="ModeHint" Margin="0,6,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+
+            <Grid Margin="0,14,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="230"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="70"/>
+              </Grid.ColumnDefinitions>
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+              </Grid.RowDefinitions>
+              <TextBlock Text="{local:T Switching_Silence}" TextWrapping="Wrap" VerticalAlignment="Center"/>
+              <Slider x:Name="SilenceSlider" Grid.Column="1" Minimum="0.5" Maximum="15" Margin="8,8"
+                      ValueChanged="SilenceSlider_ValueChanged"/>
+              <TextBlock x:Name="SilenceValue" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
+              <TextBlock Grid.Row="1" Text="{local:T Switching_Return}" VerticalAlignment="Center"/>
+              <Slider x:Name="ReturnSlider" Grid.Row="1" Grid.Column="1" Minimum="100" Maximum="1500" Margin="8,8"
+                      ValueChanged="ReturnSlider_ValueChanged"/>
+              <TextBlock x:Name="ReturnValue" Grid.Row="1" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
+            </Grid>
+
+            <ui:ToggleSwitch x:Name="SmartCheck" Margin="0,16,0,0" Content="{local:T Switching_Smart}"
+                             Checked="SmartCheck_Changed" Unchecked="SmartCheck_Changed"/>
+            <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Text="{local:T Switching_SmartHint}"/>
+
+            <ui:ToggleSwitch x:Name="BleedCheck" Margin="0,16,0,0" Content="{local:T Switching_Bleed}"
+                             Checked="BleedCheck_Changed" Unchecked="BleedCheck_Changed"/>
+            <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Text="{local:T Switching_BleedHint}"/>
+          </StackPanel>
         </ui:Card>
-        <ui:Card Margin="0,0,0,10" Padding="20">
-          <local:MicRow x:Name="HeadsetRow"/>
-        </ui:Card>
-        <ui:Card Margin="0,0,0,18" Padding="20">
-          <local:MicRow x:Name="LaptopRow"/>
+
+        <!-- History -->
+        <TextBlock Text="{local:T Section_History}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <StackPanel>
+            <TextBlock Text="{local:T History_Hours}" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <Grid x:Name="TimelineHost" Height="26" Margin="0,8,0,0"/>
+            <WrapPanel x:Name="TimelineLegend" Margin="0,10,0,0"/>
+            <TextBlock x:Name="HistoryEmpty" Text="{local:T History_Empty}" Margin="0,10,0,0"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <ListBox x:Name="HistoryList" Margin="0,10,0,0" MaxHeight="190" Background="Transparent" BorderThickness="0"/>
+          </StackPanel>
         </ui:Card>
 
         <!-- Calibration -->
-        <TextBlock Text="Calibration" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <TextBlock Text="{local:T Section_Calibration}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>
             <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Text="A guided test of about 15 seconds. It measures your room noise and how loud you are on each mic, and sets both voice thresholds. Wear your headset while testing so MicSwitcher can learn to tell the two mics apart."/>
+                       Text="{local:T Calibration_Intro}"/>
 
-            <ui:ToggleSwitch x:Name="AdjustGainCheck" Margin="0,16,0,0"
-                             Content="Also adjust the pro mic's Windows input volume"
+            <ui:ToggleSwitch x:Name="AdjustGainCheck" Margin="0,16,0,0" Content="{local:T Calibration_Gain}"
                              Checked="AdjustGainCheck_Changed" Unchecked="AdjustGainCheck_Changed"/>
 
             <ui:Button x:Name="CalibrateButton" Margin="0,16,0,0" Appearance="Primary"
-                       Content="Start calibration" Click="CalibrateButton_Click"/>
+                       Content="{local:T Calibration_Start}" Click="CalibrateButton_Click"/>
 
             <Border x:Name="CalibrationPanel" Visibility="Collapsed" Margin="0,18,0,0" Padding="20" CornerRadius="8"
                     Background="{DynamicResource ControlFillColorSecondaryBrush}">
@@ -87,7 +162,7 @@
                            Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                 <TextBlock x:Name="CountdownText" FontSize="64" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,0"/>
                 <ProgressBar x:Name="CalibrationProgress" Minimum="0" Maximum="1" Height="6" Margin="0,10,0,0"/>
-                <ui:Button x:Name="CancelCalibrationButton" Content="Cancel" HorizontalAlignment="Right" Margin="0,14,0,0"
+                <ui:Button x:Name="CancelCalibrationButton" Content="{local:T Common_Cancel}" HorizontalAlignment="Right" Margin="0,14,0,0"
                            Click="CancelCalibrationButton_Click"/>
               </StackPanel>
             </Border>
@@ -96,113 +171,107 @@
           </StackPanel>
         </ui:Card>
 
-        <!-- Fine tuning -->
-        <TextBlock Text="Fine tuning" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
-        <ui:Card Margin="0,0,0,18" Padding="22">
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="230"/>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="70"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-              <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <TextBlock Text="Pro mic voice threshold" VerticalAlignment="Center"/>
-            <Slider x:Name="ThresholdSlider" Grid.Column="1" Minimum="-80" Maximum="-10" Margin="8,8"
-                    ValueChanged="ThresholdSlider_ValueChanged"/>
-            <TextBlock x:Name="ThresholdValue" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
-
-            <TextBlock Grid.Row="1" Text="Headset mic voice threshold" VerticalAlignment="Center"/>
-            <Slider x:Name="HeadsetThresholdSlider" Grid.Row="1" Grid.Column="1" Minimum="-80" Maximum="-10" Margin="8,8"
-                    ValueChanged="HeadsetThresholdSlider_ValueChanged"/>
-            <TextBlock x:Name="HeadsetThresholdValue" Grid.Row="1" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
-
-            <TextBlock Grid.Row="2" Text="Pro mic quiet for (before the headset can take over)" TextWrapping="Wrap" VerticalAlignment="Center"/>
-            <Slider x:Name="SilenceSlider" Grid.Row="2" Grid.Column="1" Minimum="0.5" Maximum="15" Margin="8,8"
-                    ValueChanged="SilenceSlider_ValueChanged"/>
-            <TextBlock x:Name="SilenceValue" Grid.Row="2" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
-
-            <TextBlock Grid.Row="3" Text="Voice needed before switching" VerticalAlignment="Center"/>
-            <Slider x:Name="ReturnSlider" Grid.Row="3" Grid.Column="1" Minimum="100" Maximum="1500" Margin="8,8"
-                    ValueChanged="ReturnSlider_ValueChanged"/>
-            <TextBlock x:Name="ReturnValue" Grid.Row="3" Grid.Column="2" TextAlignment="Right" VerticalAlignment="Center"/>
-          </Grid>
-        </ui:Card>
-
-        <!-- Behaviour -->
-        <TextBlock Text="Appearance" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
-        <ui:Card Margin="0,0,0,18" Padding="22">
-          <Grid>
-            <Grid.ColumnDefinitions>
-              <ColumnDefinition Width="*"/>
-              <ColumnDefinition Width="200"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock Text="Theme" VerticalAlignment="Center"/>
-            <ComboBox x:Name="ThemeCombo" Grid.Column="1" SelectionChanged="ThemeCombo_SelectionChanged">
-              <ComboBoxItem Content="Follow Windows" Tag="System"/>
-              <ComboBoxItem Content="Light" Tag="Light"/>
-              <ComboBoxItem Content="Dark" Tag="Dark"/>
-              <ComboBoxItem Content="Black (OLED)" Tag="Black"/>
-            </ComboBox>
-          </Grid>
-        </ui:Card>
-
-        <TextBlock Text="Bleed protection" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <!-- Shortcuts and voice -->
+        <TextBlock Text="{local:T Section_Control}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>
-            <ui:ToggleSwitch x:Name="BleedCheck"
-                             Content="Ignore sound that comes out of my speakers or headphones"
-                             Checked="BleedCheck_Changed" Unchecked="BleedCheck_Changed"/>
-            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Text="Discord callers or music leaking into a mic will not count as you talking. The app listens to what is being played and raises the voice threshold by the amount that normally leaks into each mic. Re-run a calibration with the usual playback going to tune it."/>
-            <TextBlock x:Name="BleedStatus" Margin="0,8,0,0" FontSize="12"
+            <TextBlock x:Name="HotkeySummary" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+            <ui:Button Margin="0,10,0,0" Content="{local:T Hotkeys_Customize}" Click="HotkeysButton_Click"/>
+
+            <ui:ToggleSwitch x:Name="VoiceCheck" Margin="0,20,0,0" Content="{local:T Voice_Enable}"
+                             Checked="VoiceCheck_Changed" Unchecked="VoiceCheck_Changed"/>
+            <TextBlock Margin="0,4,0,0" TextWrapping="Wrap" FontSize="12"
+                       Foreground="{DynamicResource TextFillColorSecondaryBrush}" Text="{local:T Voice_Hint}"/>
+            <Grid Margin="0,10,0,0">
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="220"/>
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{local:T Voice_Wake}" VerticalAlignment="Center" Margin="0,0,12,0"/>
+              <TextBox x:Name="WakeBox" Grid.Column="1" MaxLength="30" LostFocus="WakeBox_LostFocus"/>
+            </Grid>
+            <TextBlock x:Name="VoiceStatus" Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
                        Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
           </StackPanel>
         </ui:Card>
 
-        <TextBlock Text="Updates" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <!-- Behaviour -->
+        <TextBlock Text="{local:T Section_Behaviour}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>
-            <ui:ToggleSwitch x:Name="AutoCheckCheck" Content="Check for updates automatically"
+            <ui:ToggleSwitch x:Name="StartupCheck" Content="{local:T Behaviour_Startup}"
+                             Checked="StartupCheck_Changed" Unchecked="StartupCheck_Changed"/>
+            <ui:ToggleSwitch x:Name="CommsCheck" Margin="0,12,0,0" Content="{local:T Behaviour_Comms}"
+                             Checked="CommsCheck_Changed" Unchecked="CommsCheck_Changed"/>
+            <ui:ToggleSwitch x:Name="NotifyCheck" Margin="0,12,0,0" Content="{local:T Behaviour_Notify}"
+                             Checked="NotifyCheck_Changed" Unchecked="NotifyCheck_Changed"/>
+          </StackPanel>
+        </ui:Card>
+
+        <!-- Appearance -->
+        <TextBlock Text="{local:T Section_Appearance}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/>
+              <ColumnDefinition Width="220"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto"/>
+              <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="{local:T Appearance_Theme}" VerticalAlignment="Center"/>
+            <ComboBox x:Name="ThemeCombo" Grid.Column="1" SelectionChanged="ThemeCombo_SelectionChanged">
+              <ComboBoxItem Content="{local:T Theme_System}" Tag="System"/>
+              <ComboBoxItem Content="{local:T Theme_Light}" Tag="Light"/>
+              <ComboBoxItem Content="{local:T Theme_Dark}" Tag="Dark"/>
+              <ComboBoxItem Content="{local:T Theme_Black}" Tag="Black"/>
+            </ComboBox>
+            <TextBlock Grid.Row="1" Text="{local:T Appearance_Language}" VerticalAlignment="Center" Margin="0,14,0,0"/>
+            <ComboBox x:Name="LanguageCombo" Grid.Row="1" Grid.Column="1" Margin="0,14,0,0"
+                      SelectionChanged="LanguageCombo_SelectionChanged"/>
+          </Grid>
+        </ui:Card>
+
+        <!-- Updates -->
+        <TextBlock Text="{local:T Section_Updates}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Margin="0,0,0,18" Padding="22">
+          <StackPanel>
+            <ui:ToggleSwitch x:Name="AutoCheckCheck" Content="{local:T Updates_Auto}"
                              Checked="Updates_Changed" Unchecked="Updates_Changed"/>
-            <ui:ToggleSwitch x:Name="AutoInstallCheck" Margin="0,12,0,0" Content="Install updates automatically"
+            <ui:ToggleSwitch x:Name="AutoInstallCheck" Margin="0,12,0,0" Content="{local:T Updates_Install}"
                              Checked="Updates_Changed" Unchecked="Updates_Changed"/>
-            <ui:ToggleSwitch x:Name="PrereleaseCheck" Margin="0,12,0,0" Content="Include early (pre-release) versions"
+            <ui:ToggleSwitch x:Name="PrereleaseCheck" Margin="0,12,0,0" Content="{local:T Updates_Pre}"
                              Checked="Updates_Changed" Unchecked="Updates_Changed"/>
             <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
-              <ui:Button x:Name="UpdateButton" Content="Check for updates" Click="UpdateButton_Click"/>
+              <ui:Button x:Name="UpdateButton" Content="{local:T Updates_Check}" Click="UpdateButton_Click"/>
               <TextBlock x:Name="UpdateInfoText" Margin="14,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap"
                          Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
             </StackPanel>
           </StackPanel>
         </ui:Card>
 
-        <TextBlock Text="Behaviour" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <!-- Help -->
+        <TextBlock Text="{local:T Section_Help}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
         <ui:Card Margin="0,0,0,18" Padding="22">
           <StackPanel>
-            <ui:ToggleSwitch x:Name="CommsCheck"
-                             Content="Also change the default communications device (Teams, Discord, Zoom…)"
-                             Checked="CommsCheck_Changed" Unchecked="CommsCheck_Changed"/>
-            <ui:ToggleSwitch x:Name="StartupCheck" Margin="0,14,0,0"
-                             Content="Start with Windows (background, administrator rights)"
-                             Checked="StartupCheck_Changed" Unchecked="StartupCheck_Changed"/>
-            <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" FontSize="12"
-                       Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                       Text="Turning startup on or off asks for administrator permission once. Closing this window keeps MicSwitcher running in the system tray; use the tray menu to exit."/>
+            <TextBlock TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                       Text="{local:T Help_Intro}"/>
+            <WrapPanel Margin="0,12,0,0">
+              <ui:Button Content="{local:T Help_Setup}" Margin="0,0,8,8" Click="SetupButton_Click"/>
+              <ui:Button Content="{local:T Help_Copy}" Margin="0,0,8,8" Click="CopyDiagnostics_Click"/>
+              <ui:Button Content="{local:T Help_Save}" Margin="0,0,8,8" Click="SaveDiagnostics_Click"/>
+            </WrapPanel>
+            <TextBlock x:Name="HelpStatus" Margin="0,4,0,0" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
           </StackPanel>
         </ui:Card>
 
         <!-- Log -->
-        <Expander Header="Activity log" Margin="0,0,0,0" HorizontalAlignment="Stretch">
-          <ListBox x:Name="LogList" Height="170" FontFamily="Consolas" FontSize="12" Margin="0,8,0,0"/>
-        </Expander>
-
+        <TextBlock Text="{local:T Section_Log}" FontSize="18" FontWeight="SemiBold" Margin="2,0,0,10"/>
+        <ui:Card Padding="12">
+          <ListBox x:Name="LogList" Height="200" Background="Transparent" BorderThickness="0"
+                   FontFamily="Consolas" FontSize="12"/>
+        </ui:Card>
       </StackPanel>
     </ScrollViewer>
   </Grid>

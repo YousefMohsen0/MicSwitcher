@@ -8,7 +8,7 @@ using Wpf.Ui.Controls;
 
 namespace MicSwitcher.App;
 
-/// <summary>Names and icons shown for the three mics, including the user's own choices.</summary>
+/// <summary>Icons shown for the mics, including the user's own choices.</summary>
 public static class MicAppearance
 {
     /// <summary>Built-in icons the user can pick from (key = SymbolRegular name).</summary>
@@ -22,35 +22,15 @@ public static class MicAppearance
     private static readonly string IconFolder = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MicSwitcher", "icons");
 
-    public static string DefaultName(MicRole role) => role switch
-    {
-        MicRole.Pro => "Pro mic",
-        MicRole.Headset => "Headset mic",
-        _ => "Laptop mic",
-    };
-
-    public static SymbolRegular DefaultIcon(MicRole role) => role switch
-    {
-        MicRole.Pro => SymbolRegular.Mic24,
-        MicRole.Headset => SymbolRegular.Headphones24,
-        _ => SymbolRegular.Laptop24,
-    };
-
-    public static string NameOf(AppSettings settings, MicRole role)
-    {
-        string? label = settings.Get(role).Label;
-        return string.IsNullOrWhiteSpace(label) ? DefaultName(role) : label.Trim();
-    }
-
-    public static SymbolRegular SymbolOf(AppSettings settings, MicRole role) =>
-        Enum.TryParse(settings.Get(role).IconKey, out SymbolRegular symbol) && Array.IndexOf(Enum.GetValues<SymbolRegular>(), symbol) >= 0
+    public static SymbolRegular SymbolOf(MicSlot mic) =>
+        Enum.TryParse(mic.IconKey, out SymbolRegular symbol) && Array.IndexOf(Enum.GetValues<SymbolRegular>(), symbol) >= 0
             ? symbol
-            : DefaultIcon(role);
+            : mic.Fallback ? SymbolRegular.Laptop24 : SymbolRegular.Mic24;
 
     /// <summary>The user's own picture for a mic, or null when none is set or it can no longer be read.</summary>
-    public static ImageSource? ImageOf(AppSettings settings, MicRole role)
+    public static ImageSource? ImageOf(MicSlot mic)
     {
-        string? path = settings.Get(role).IconPath;
+        string? path = mic.IconPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
         {
             return null;
@@ -77,7 +57,7 @@ public static class MicAppearance
     /// Copies a picture the user selected into the app's own folder (small PNG), so it keeps working even if the
     /// original file is moved or deleted. Returns the new path, or null with an error message.
     /// </summary>
-    public static string? Import(MicRole role, string sourcePath, out string? error)
+    public static string? Import(string slotId, string sourcePath, out string? error)
     {
         error = null;
         try
@@ -90,7 +70,7 @@ public static class MicAppearance
             image.EndInit();
 
             Directory.CreateDirectory(IconFolder);
-            string target = Path.Combine(IconFolder, $"{role}-{DateTime.UtcNow:yyyyMMddHHmmss}.png");
+            string target = Path.Combine(IconFolder, $"{slotId}-{DateTime.UtcNow:yyyyMMddHHmmss}.png");
             var encoder = new PngBitmapEncoder();
             encoder.Frames.Add(BitmapFrame.Create(image));
             using (FileStream stream = File.Create(target))
@@ -102,7 +82,7 @@ public static class MicAppearance
         }
         catch (Exception ex)
         {
-            error = "That file could not be used as a picture: " + ex.Message;
+            error = Loc.F("Customize_BadPicture", ex.Message);
             return null;
         }
     }

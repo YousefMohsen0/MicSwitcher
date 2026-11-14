@@ -22,36 +22,44 @@ public class SettingsStoreTests : IDisposable
     {
         var settings = SettingsStore.Load(SettingsPath);
 
-        Assert.Null(settings.Pro.DeviceId);
-        Assert.Equal(2, settings.SilenceTimeoutSeconds);
+        Assert.Empty(settings.Mics);
+        Assert.Equal(2, settings.ActiveProfile.SilenceTimeoutSeconds);
         Assert.True(settings.SwitchCommunicationsRole);
         Assert.False(settings.Paused);
+        Assert.False(settings.FirstRunCompleted);
+        Assert.Equal("System", settings.Theme);
+        Assert.Equal("auto", settings.Language);
+        Assert.True(settings.ActiveProfile.IgnoreBleed);
+        Assert.False(settings.ActiveProfile.SmartVoice);
     }
 
     [Fact]
     public void SaveThenLoad_RoundTrips()
     {
-        var settings = new AppSettings
+        var settings = new AppSettings { Theme = "Black", Language = "ar-EG", Paused = true, StartWithWindows = true, NotifyOnSwitch = true };
+        settings.Mics.Add(new MicSlot
         {
-            VoiceThresholdDb = -38.5,
-            SilenceTimeoutSeconds = 7,
-            Paused = true,
-            StartWithWindows = true,
-        };
-        settings.Pro.DeviceId = "{0.0.1.00000000}.{abc}";
-        settings.Pro.DeviceName = "Studio Mic";
-        settings.Headset.DeviceId = "{0.0.1.00000000}.{def}";
+            Id = "one", DeviceId = "{0.0.1.00000000}.{abc}", DeviceName = "Studio Mic", Label = "Main", IconKey = "Mic24",
+            VoiceThresholdDb = -38.5, BleedCouplingDb = -24, OutputDeviceId = "out", OutputVolumePercent = 40,
+        });
+        settings.Mics.Add(new MicSlot { Id = "two", Fallback = true });
+        settings.Hotkeys.Add(new HotkeyBinding { Action = HotkeyAction.SwitchToMic, MicId = "one", Gesture = "Ctrl+Alt+1" });
 
         SettingsStore.Save(settings, SettingsPath);
         var loaded = SettingsStore.Load(SettingsPath);
 
-        Assert.Equal(-38.5, loaded.VoiceThresholdDb);
-        Assert.Equal(7, loaded.SilenceTimeoutSeconds);
+        Assert.Equal("Black", loaded.Theme);
+        Assert.Equal("ar-EG", loaded.Language);
         Assert.True(loaded.Paused);
-        Assert.True(loaded.StartWithWindows);
-        Assert.Equal("{0.0.1.00000000}.{abc}", loaded.Pro.DeviceId);
-        Assert.Equal("Studio Mic", loaded.Pro.DeviceName);
-        Assert.Equal("{0.0.1.00000000}.{def}", loaded.Get(MicRole.Headset).DeviceId);
+        Assert.True(loaded.NotifyOnSwitch);
+        Assert.Equal(2, loaded.Mics.Count);
+        Assert.Equal("Studio Mic", loaded.Mics[0].DeviceName);
+        Assert.Equal("Main", loaded.Mics[0].Label);
+        Assert.Equal(-38.5, loaded.Mics[0].VoiceThresholdDb);
+        Assert.Equal(-24, loaded.Mics[0].BleedCouplingDb);
+        Assert.Equal(40, loaded.Mics[0].OutputVolumePercent);
+        Assert.True(loaded.Mics[1].Fallback);
+        Assert.Equal("Ctrl+Alt+1", Assert.Single(loaded.Hotkeys).Gesture);
     }
 
     [Fact]
@@ -62,14 +70,17 @@ public class SettingsStoreTests : IDisposable
 
         var settings = SettingsStore.Load(SettingsPath);
 
-        Assert.Equal(2, settings.SilenceTimeoutSeconds);
+        Assert.Equal(2, settings.ActiveProfile.SilenceTimeoutSeconds);
         Assert.True(File.Exists(SettingsPath + ".bak"));
     }
 
     [Fact]
     public void EngineOptions_AreClampedToSaneValues()
     {
-        var settings = new AppSettings { SilenceTimeoutSeconds = 0, ReturnDelayMs = -5, MinSwitchIntervalSeconds = -1 };
+        var settings = new AppSettings();
+        settings.ActiveProfile.SilenceTimeoutSeconds = 0;
+        settings.ActiveProfile.ReturnDelayMs = -5;
+        settings.ActiveProfile.MinSwitchIntervalSeconds = -1;
 
         var options = settings.ToEngineOptions();
 
@@ -79,75 +90,106 @@ public class SettingsStoreTests : IDisposable
     }
 
     [Fact]
-    public void NewDefaults_AreSensible()
+    public void ForcedMic_MeansManualMode()
     {
         var settings = new AppSettings();
+        settings.Mics.Add(new MicSlot { Id = "m" });
+        settings.ActiveProfile.ForcedMicId = "m";
 
-        Assert.True(settings.IgnoreBleed);
-        Assert.Equal(6, settings.BleedMarginDb);
-        Assert.Null(settings.ProBleedCouplingDb);
-        Assert.Null(settings.HeadsetBleedCouplingDb);
-        Assert.True(settings.AutoCheckUpdates);
-        Assert.False(settings.AutoInstallUpdates);
-        Assert.True(settings.IncludePrereleases);
+        Assert.Equal(SwitchMode.Manual, settings.ToEngineOptions().Mode);
+    }
+
+    [Fact]
+    public void Version1File_IsMigratedToMicSlotsAndAProfile()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(SettingsPath, """
+            {
+              "Theme": "Dark",
+              "Pro": { "DeviceId": "pro-id", "DeviceName": "Studio", "Label": "My studio mic", "IconKey": "Star24" },
+              "Headset": { "DeviceId": "head-id", "DeviceName": "Headset" },
+              "Laptop": { "DeviceId": "lap-id", "DeviceName": "Built-in" },
+              "VoiceThresholdDb": -40,
+              "HeadsetVoiceThresholdDb": -33,
+              "SilenceTimeoutSeconds": 3,
+              "ReturnDelayMs": 450,
+              "IgnoreBleed": false,
+              "ProBleedCouplingDb": -31,
+              "Paused": true
+            }
+            """);
+
+        var loaded = SettingsStore.Load(SettingsPath);
+
+        Assert.Equal("Dark", loaded.Theme);
+        Assert.True(loaded.Paused);
+        Assert.Equal(3, loaded.Mics.Count);
+
+        Assert.Equal("pro", loaded.Mics[0].Id);
+        Assert.Equal("pro-id", loaded.Mics[0].DeviceId);
+        Assert.Equal("My studio mic", loaded.Mics[0].Label);
+        Assert.Equal("Star24", loaded.Mics[0].IconKey);
+        Assert.Equal(-40, loaded.Mics[0].VoiceThresholdDb);
+        Assert.Equal(-31, loaded.Mics[0].BleedCouplingDb);
+        Assert.False(loaded.Mics[0].Fallback);
+
+        Assert.Equal("Headset mic", loaded.Mics[1].Label);
+        Assert.Equal(-33, loaded.Mics[1].VoiceThresholdDb);
+
+        Assert.True(loaded.Mics[2].Fallback);
+
+        Assert.Equal(3, loaded.ActiveProfile.SilenceTimeoutSeconds);
+        Assert.Equal(450, loaded.ActiveProfile.ReturnDelayMs);
+        Assert.False(loaded.ActiveProfile.IgnoreBleed);
+        Assert.True(loaded.FirstRunCompleted);
+    }
+
+    [Fact]
+    public void Normalize_RepairsBrokenReferences()
+    {
+        var settings = new AppSettings { ActiveProfileId = "gone" };
+        settings.Mics.Add(new MicSlot { Id = "x", VoiceThresholdDb = -500 });
+        settings.Mics.Add(new MicSlot { Id = "x" });
+        settings.ActiveProfile.ExcludedMicIds.Add("missing");
+        settings.ActiveProfile.ForcedMicId = "missing";
+        settings.Hotkeys.Add(new HotkeyBinding { Gesture = "" });
+
+        settings.Normalize();
+
+        Assert.NotEqual(settings.Mics[0].Id, settings.Mics[1].Id);
+        Assert.Equal(-90, settings.Mics[0].VoiceThresholdDb);
+        Assert.Equal(settings.Profiles[0].Id, settings.ActiveProfileId);
+        Assert.Empty(settings.ActiveProfile.ExcludedMicIds);
+        Assert.Null(settings.ActiveProfile.ForcedMicId);
+        Assert.Empty(settings.Hotkeys);
+    }
+
+    [Fact]
+    public void MicNames_FallBackToDeviceNameThenPosition()
+    {
+        var settings = new AppSettings();
+        settings.Mics.Add(new MicSlot { Id = "a", Label = "Boss" });
+        settings.Mics.Add(new MicSlot { Id = "b", DeviceName = "USB Audio" });
+        settings.Mics.Add(new MicSlot { Id = "c" });
+
+        Assert.Equal("Boss", settings.MicName("a"));
+        Assert.Equal("USB Audio", settings.MicName("b"));
+        Assert.Equal("Microphone 3", settings.MicName("c"));
     }
 
     [Fact]
     public void BleedAndUpdateSettings_RoundTrip()
     {
-        var settings = new AppSettings
-        {
-            IgnoreBleed = false,
-            BleedMarginDb = 9,
-            ProBleedCouplingDb = -38.5,
-            HeadsetBleedCouplingDb = -24,
-            AutoCheckUpdates = false,
-            AutoInstallUpdates = true,
-            IncludePrereleases = false,
-        };
+        var settings = new AppSettings { BleedMarginDb = 9, AutoCheckUpdates = false, AutoInstallUpdates = true, IncludePrereleases = false };
+        settings.ActiveProfile.IgnoreBleed = false;
 
         SettingsStore.Save(settings, SettingsPath);
         var loaded = SettingsStore.Load(SettingsPath);
 
-        Assert.False(loaded.IgnoreBleed);
         Assert.Equal(9, loaded.BleedMarginDb);
-        Assert.Equal(-38.5, loaded.ProBleedCouplingDb);
-        Assert.Equal(-24, loaded.HeadsetBleedCouplingDb);
+        Assert.False(loaded.ActiveProfile.IgnoreBleed);
         Assert.False(loaded.AutoCheckUpdates);
         Assert.True(loaded.AutoInstallUpdates);
         Assert.False(loaded.IncludePrereleases);
-    }
-
-    [Fact]
-    public void SettingsFileFromAnOlderVersion_StillLoads_WithNewDefaults()
-    {
-        Directory.CreateDirectory(_dir);
-        File.WriteAllText(SettingsPath, "{ \"VoiceThresholdDb\": -40, \"Paused\": true }");
-
-        var loaded = SettingsStore.Load(SettingsPath);
-
-        Assert.Equal(-40, loaded.VoiceThresholdDb);
-        Assert.True(loaded.Paused);
-        Assert.True(loaded.IgnoreBleed);
-        Assert.True(loaded.AutoCheckUpdates);
-    }
-
-    [Fact]
-    public void ThemeAndMicAppearance_RoundTrip()
-    {
-        var settings = new AppSettings { Theme = "Black" };
-        settings.Headset.Label = "Gaming headset";
-        settings.Headset.IconKey = "Headphones24";
-        settings.Pro.IconPath = @"C:\icons\mic.png";
-
-        SettingsStore.Save(settings, SettingsPath);
-        var loaded = SettingsStore.Load(SettingsPath);
-
-        Assert.Equal("Black", loaded.Theme);
-        Assert.Equal("Gaming headset", loaded.Headset.Label);
-        Assert.Equal("Headphones24", loaded.Headset.IconKey);
-        Assert.Equal(@"C:\icons\mic.png", loaded.Pro.IconPath);
-        Assert.Null(loaded.Laptop.Label);
-        Assert.Equal("System", new AppSettings().Theme);
     }
 }
