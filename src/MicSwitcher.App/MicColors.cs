@@ -1,3 +1,4 @@
+using System;
 using System.Windows.Media;
 using MicSwitcher.Core;
 
