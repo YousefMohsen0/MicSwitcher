@@ -1,21 +1,19 @@
 # MicSwitcher
 
-**Automatically switch your default Windows microphone between a main mic, a headset mic and a built-in mic, based
-on whether anyone is actually talking into the main one.**
+**Automatically switch your default Windows microphone between 2 to 10 mics, based on which one you are actually
+talking into.**
 
-MicSwitcher is a small tray app for Windows 10/11. If you own a good desk microphone *and* a headset, you have probably
-run into this: Windows can only use one input at a time, so you either keep digging through Sound settings, or you end
-up with the wrong mic live. MicSwitcher listens to your mics and flips the default for you.
+MicSwitcher is a small tray app for Windows 10/11. If you own a desk microphone *and* a headset (or several mics),
+Windows can only use one input at a time, so you either dig through Sound settings or end up with the wrong mic live.
+MicSwitcher listens to your mics and flips the default for you.
 
-- Talk into your desk mic and it is used.
-- Put the headset on and speak into that instead, and the headset mic takes over automatically.
+- Talk into your main mic and it is used. Put the headset on and talk into that, and it takes over.
+- Talk into several mics at once and the one highest in your priority list wins (or the loudest, your choice).
 - Stop talking and nothing changes; it never switches just because it is quiet.
 - Unplug things and it falls back to whatever is still connected.
 
-Everything runs locally. MicSwitcher only measures audio *levels*; it never records, stores or sends audio, and it
-does not use the network.
-
-> **Status:** early release (v0.x). Bug reports and feedback are very welcome; see [Contributing](#contributing).
+Everything runs locally. MicSwitcher only measures audio *levels* and *spectrum shape*; it never records, stores or
+sends audio. The only network use is the optional update check.
 
 ## Contents
 
@@ -24,6 +22,8 @@ does not use the network.
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Settings explained](#settings-explained)
+- [Shortcuts and voice commands](#shortcuts-and-voice-commands)
+- [Languages](#languages)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
 - [Build from source](#build-from-source)
@@ -33,50 +33,47 @@ does not use the network.
 
 ## How it works
 
-You assign up to three microphones to roles, in priority order:
+You list your microphones in priority order (2 to 10). The first has the highest priority. Mark any mic as a
+**fallback** (for example the laptop's built-in mic): it is only used when no normal mic is connected.
 
-| Role | Typical device | Used when |
-|------|----------------|-----------|
-| **Pro mic** | Desk / studio / USB / XLR mic | Whenever a voice is heard on it. |
-| **Headset mic** | Mic on a headset (often always on) | The pro mic is quiet, or not connected. |
-| **Laptop mic** | Built-in microphone | Only when neither of the others is connected. |
+Three modes, set per **profile**:
 
-You do not need all three. Leave a role unset and it is simply skipped.
+| Mode | Behaviour |
+|------|-----------|
+| **Priority** (default) | The highest mic that hears a voice is used. A lower mic only takes over when every mic above it has been free of voice for a moment (default 2 s). Talking into two mics at once: the higher one wins. |
+| **Loudest wins** | The mic that hears your voice clearly louder than the current one (by a margin) is used. |
+| **Manual** | Nothing switches by itself; use the tray menu, a shortcut or a voice command. |
 
-The rules:
+In every mode: silence changes nothing, a short minimum time between switches prevents flip-flopping, and a missing
+default is replaced by the best connected mic.
 
-1. **Pro mic not connected:** use the headset mic; if that is missing too, use the laptop mic.
-2. **Pro mic connected:** it is the default. The headset mic only takes over when a voice is heard **on the headset
-   mic and not on the pro mic** (the pro mic has been free of voice for a couple of seconds, default 2 s).
-3. **Silence changes nothing.** If nobody is talking, the current mic stays the default, whichever it is.
-4. **Back to the pro mic:** while the headset is the default, it stays the default until a voice is heard on the pro
-   mic for a moment (default 0.3 s).
-5. A short minimum time between switches prevents flip-flopping, and the laptop mic is never chosen while the pro or
-   headset mic is available.
-
-The pro and headset mics are monitored continuously, even while they are not the default (Windows lets several apps
-listen to a mic at once). The laptop mic is only metered while the settings window is open.
-
-Because the headset mic also hears you when you talk into the pro mic, calibration measures how loudly each mic hears
-you when you use the *other* one, and places the voice thresholds so the two can be told apart.
+Mics are monitored continuously, even when they are not the default (Windows lets several apps listen to a mic at
+once). Because a headset mic also hears you when you talk into another mic, calibration measures how loudly each mic
+hears you when you use the *others* and places the voice thresholds so they can be told apart.
 
 ## Features
 
-- Runs quietly in the **system tray**. The icon colour shows the active mic: green = pro, amber = headset,
-  red = laptop, grey = paused or none.
-- **Modern settings window** (follows your Windows light/dark theme) with mic selection, live level meters that show
-  the voice threshold as a marker line, "voice / quiet" indicators and an activity log.
-- **Guided calibration** with a live countdown: measures your room noise and how loud you are on each mic, sets both
-  voice thresholds, and can optionally adjust the Windows input volume of the pro mic so your voice lands at a good
-  level.
-- Adjustable thresholds, **pro-quiet time** and **switch delay**, plus a **pause** switch.
-- Optionally changes the **default communications device** too (the one Teams, Discord and Zoom use).
-- **Start with Windows**, running in the background with administrator rights and no UAC prompt at each logon.
-- **Bleed protection**: sound from your speakers or headphones (a Discord call, music) that leaks into a mic is
-  recognised and not mistaken for you talking.
-- **Optional auto-update** from GitHub releases (checksum-verified), and a small **installer**; no .NET runtime needed.
-- Light on resources: it only wakes ~10 times per second, trims its memory when the window is closed, and builds the
-  window on demand.
+- **2 to 10 microphones**, reorderable, each with your own **name and icon** (built-in icons or a picture).
+- **Profiles**: named sets of rules (mode, timings, ignored mics, a fixed mic) you can switch between from the tray,
+  a shortcut or by voice.
+- **"Why did it switch?" timeline**: a coloured bar of the last 6 hours and a list of recent switches with the
+  reason and what triggered them (automatic, tray, shortcut, voice).
+- **Tray quick-switch menu**: pick a mic and keep it for 10 min, 30 min, 1 h or until you release it; pause; change
+  profile.
+- **Global shortcuts**: switch to a specific mic, next mic, pause/resume, back to automatic, switch profile.
+- **Voice commands** (opt-in): "hey mic, switch to headset", "pause", "next mic"… See below.
+- **Smart voice detection** (opt-in): besides loudness it checks that the sound has a speech-like spectrum, so
+  keyboards, fans and bumps do not count as voice. Classic loudness detection stays the default.
+- **Output switching**: per mic, choose the playback device (and its volume) that Windows should use when that mic
+  becomes active, for example headset speakers when the headset mic is live.
+- **Guided calibration** for any number of mics, with a live countdown.
+- **Bleed protection**: sound from your speakers or headphones that leaks into a mic is not mistaken for you.
+- **Switch notifications** (off by default).
+- **First-run setup** guide, which you can run again from the settings.
+- **Diagnostics export**: copy or save a report with your settings, devices and recent log to attach to a bug report.
+- **Themes**: follow Windows, light, dark, or pure black (AMOLED).
+- **Languages**: English and Egyptian Arabic (with right-to-left layout).
+- Start with Windows, optional checksum-verified auto-update, small installer, no .NET runtime needed.
 
 ## Install
 
@@ -87,8 +84,10 @@ you when you use the *other* one, and places the voice thresholds so the two can
 
 Uninstall from Windows **Settings → Apps**; this also removes the "Start with Windows" task.
 
-Because the installer is not code-signed yet, Windows SmartScreen may show "Windows protected your PC" the first time.
-Choose **More info → Run anyway**. If you prefer, you can [build it from source](#build-from-source) instead.
+The installer is not code-signed unless the maintainer has configured a certificate, so Windows SmartScreen may show
+"Windows protected your PC" the first time. Choose **More info → Run anyway**, or [build it from source](#build-from-source).
+(Maintainers: add the repository secrets `CODESIGN_PFX_BASE64` and `CODESIGN_PFX_PASSWORD` and the CI signs the app and
+installer automatically.)
 
 ### Updates
 
@@ -105,30 +104,49 @@ music playing quietly in the background to tune it precisely. You can turn it of
 
 ## Quick start
 
-1. Start MicSwitcher from the Start menu. The settings window opens.
-2. In **Microphones**, choose which device is your **pro**, **headset** and **laptop** mic.
-3. Put your headset on and click **Start calibration**. Follow the countdown: stay quiet for 3 seconds, speak into the
-   pro mic for 5 seconds, then speak into the headset mic for 5 seconds.
-4. Optional: tick **Start with Windows**. Windows asks for administrator permission once.
-5. Close the window. MicSwitcher keeps running in the tray; right-click the tray icon to pause or exit.
+1. Start MicSwitcher. On first run a short setup guide helps you pick language, theme and your microphones.
+2. Optionally let it **calibrate** (about 15 seconds): stay quiet, then speak into each mic when asked.
+3. Close the window. MicSwitcher keeps running in the tray; right-click the icon to keep a mic, pause or exit.
 
-To check it works, talk into the pro mic, then talk into the headset: the activity log shows each switch and why it
-happened.
+Check it works by talking into different mics: the activity log and the timeline show each switch and why.
 
 ## Settings explained
 
 | Setting | What it does |
 |---------|--------------|
-| **Pause automatic switching** | Keeps monitoring but never changes the Windows default. Also available from the tray menu. |
-| **Also adjust the pro mic's Windows input volume** | Lets calibration change the pro mic's Windows input volume so speech lands at a good level. |
-| **Pro mic voice threshold** | Level (dB) the pro mic must exceed to count as "someone is talking". Set by calibration; lower = more sensitive. Shown as a line on the meter. |
-| **Headset mic voice threshold** | The same for the headset mic. |
-| **Pro mic quiet for…** | How long the pro mic must be free of voice before a voice on the headset is allowed to take over (0.5 to 15 s). |
-| **Voice needed before switching** | How long a voice must be heard on a mic before switching to it (100 to 1500 ms). |
-| **Also change the default communications device** | Sets the "default communications device" too, which chat apps like Teams, Discord and Zoom use. |
-| **Start with Windows** | Registers a Task Scheduler logon task that starts MicSwitcher hidden in the tray with highest privileges. |
+| **Your microphones** | The mics to choose between, in priority order. Use the arrows to reorder, the pencil for name, icon, fallback and output. The slider is the voice level that counts as "talking". |
+| **Profile / Mode** | See [How it works](#how-it-works). **Manage…** adds, renames and edits profiles. |
+| **Wait before a lower mic takes over** | How long higher mics must be free of voice first. |
+| **Voice must last before switching** | How long a voice must be heard before switching to that mic. |
+| **Smart voice detection** | Also requires a speech-like sound (slightly more CPU). |
+| **Ignore sound from my speakers** | Bleed protection. |
+| **Calibration** | Measures noise and voice per mic and sets the thresholds; can adjust the first mic's Windows input volume. |
+| **Also change the "communications" default** | Also sets the device Teams, Discord and Zoom use. |
+| **Start with Windows** | Registers a logon task that starts MicSwitcher hidden in the tray (with administrator rights, no prompt at logon). |
+| **Notify on switch** | Shows a toast when the mic changes. |
 
-Settings are stored in `%AppData%\MicSwitcher\settings.json` and the log in `%AppData%\MicSwitcher\log.txt`.
+Settings live in `%AppData%\MicSwitcher\settings.json`, the switch history in `history.json` and the log in
+`log.txt` in the same folder. Settings from older versions are migrated automatically.
+
+## Shortcuts and voice commands
+
+**Shortcuts** (Settings → Shortcuts and voice → Customize) are global: choose an action, pick a mic or profile if
+needed, click the box and press the keys. Use Ctrl/Alt/Shift/Windows plus a key (F-keys work alone). If another
+program already owns a shortcut, MicSwitcher tells you.
+
+**Voice commands** are off by default. When on, MicSwitcher listens on your Windows default microphone with the
+speech recogniser built into Windows (offline; nothing is sent anywhere) for a wake phrase (default "hey mic")
+followed by a command: *switch to \<mic name\>*, *next mic*, *pause*, *resume*, *back to automatic*, *switch profile
+to \<name\>*.
+
+Limits you should know about: it uses the recogniser Windows has for your language (English works best), and only
+mic and profile names written in the Latin alphabet are added to the vocabulary, so Arabic names are **not**
+recognised. Accuracy depends on your microphone and room; it is a convenience, not a guarantee.
+
+## Languages
+
+English and Egyptian Arabic (العربية - مصر). Choose in the setup guide or in Settings → Appearance. More languages can be added in
+`Strings.cs` and `Loc.cs`.
 
 ## FAQ
 
@@ -144,8 +162,8 @@ rights, and the app also runs fine without elevation if you just launch it by ha
 **How do I remove autostart?**
 Untick **Start with Windows** in the app, or delete the `MicSwitcher` task in Task Scheduler.
 
-**Can I use only two mics?**
-Yes. Leave the role you do not have set to *(not set)*.
+**How many mics can I use?**
+From 2 up to 10.
 
 **My headset mic is always on. Is that a problem?**
 No, that is exactly the case MicSwitcher is built for. Both mics are watched for voice; the headset only takes over
@@ -155,9 +173,8 @@ when the voice is on the headset and not on the pro mic.
 Nothing. The current default stays as it is until a voice is heard.
 
 **Does it detect "human voice" or just loudness?**
-Currently loudness against a calibrated threshold, with smoothing to ignore clicks and bridge pauses between words. A
-loud non-voice sound right next to the pro mic can therefore count as voice. See [Contributing](#contributing) if you
-would like to help add a real voice-activity model.
+By default loudness against a calibrated threshold. Turn on **Smart voice detection** to also require a speech-like
+spectrum; it is a lightweight check, not a neural model, so very loud speech-like noise can still fool it.
 
 ## Troubleshooting
 
@@ -175,10 +192,10 @@ Recalibrate with the headset on, raise the pro mic threshold a few dB, move the 
 pro mic's input volume.
 
 **It switches back and forth while I talk.**
-Raise **Voice needed before switching** or **Pro mic quiet for…**, and check on the meters that the threshold lines sit
+Raise **Voice needed before switching** or **Wait before a lower mic takes over for…**, and check on the meters that the threshold lines sit
 clearly above the idle noise and below your speech.
 
-**The pro mic shows no level.**
+**A mic shows no level.**
 Another program may be using the mic in *exclusive mode*, which stops other apps (including MicSwitcher) from listening.
 In Windows Sound settings → the device's properties → Advanced, untick "Allow applications to take exclusive control".
 
@@ -203,7 +220,7 @@ dotnet run --project src/MicSwitcher.App
 
 # installer (needs Inno Setup 6)
 dotnet publish src/MicSwitcher.App -c Release -r win-x64 --self-contained true -o publish
-iscc /DAppVersion=0.3.0 /DSourceDir=publish installer\MicSwitcher.iss
+iscc /DAppVersion=1.0.0 /DSourceDir=publish installer\MicSwitcher.iss
 ```
 
 The core logic and its tests target plain .NET 8 and run on any OS; only the app project needs Windows.
@@ -218,9 +235,9 @@ tests/MicSwitcher.Core.Tests/    xUnit tests for everything in Core
 installer/                       Inno Setup script for the compressed installer
 ```
 
-How the pieces fit: audio capture (`MicMonitor`) produces a level per short block → `EnergyVoiceDetector` decides if it
-is voice → `SwitchingEngine` decides which mic should be the default → `AudioDeviceService` sets it in Windows.
-`SwitchController` runs this loop ten times per second.
+How the pieces fit: audio capture (`CaptureMonitor`) produces a level per short block → `EnergyVoiceDetector` (and
+optionally `SpeechAnalyzer`) decides if it is voice → `MicEngine` decides which mic should be the default →
+`AudioDeviceService` sets it in Windows. `SwitchController` runs this loop and records `SwitchHistory`.
 
 Notes for contributors: the default device is changed through the `IPolicyConfig` COM interface, which Windows itself
 uses and tools like SoundSwitch rely on, but which has no official public documentation.
@@ -232,8 +249,7 @@ Issues and pull requests are welcome.
 - **Bug reports:** please include your Windows version, which kinds of mics you use (USB, XLR via interface,
   Bluetooth, built-in) and the relevant part of the activity log (`%AppData%\MicSwitcher\log.txt`).
 - **Code:** keep decision logic in `MicSwitcher.Core` with unit tests; run `dotnet test` before opening a pull request.
-- **Ideas:** a real voice-activity detector (WebRTC VAD or a small neural model), a hotkey to force a mic, per-mic
-  gain presets, a signed installer.
+- **Ideas:** a neural voice-activity model, more languages, per-mic gain presets.
 
 ## Credits
 
