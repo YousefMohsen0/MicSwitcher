@@ -156,7 +156,7 @@ public sealed class SetupWizard : FluentWindow
             var row = new StackPanel { Orientation = Orientation.Horizontal };
             try
             {
-                row.Children.Add(new Image
+                row.Children.Add(new System.Windows.Controls.Image
                 {
                     Source = new BitmapImage(new Uri("pack://application:,,,/" + lang.FlagResource)),
                     Width = 24,
